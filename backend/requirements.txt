@@ -22,8 +22,12 @@ pymysql
 passlib[bcrypt]
 itsdangerous
 python-multipart
+pydantic[email]
+mailjet-rest
 
 # -------------------------
 # Config / Utils
 # -------------------------
 python-dotenv
+
+

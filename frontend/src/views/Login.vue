@@ -61,9 +61,12 @@
 
 <script setup>
 import { reactive, ref } from "vue"
-import { useRouter, RouterLink } from "vue-router"
+import { useRouter, useRoute, RouterLink } from "vue-router"
+import { useAuth } from "../composables/useAuth"
 
 const router = useRouter()
+const route = useRoute()
+const { fetchCurrentUser } = useAuth()
 
 const form = reactive({
   username: "",
@@ -78,7 +81,7 @@ async function login() {
   error.value = ""
 
   try {
-    const res = await fetch("/auth/login", {
+    const res = await fetch("/api/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
@@ -89,10 +92,10 @@ async function login() {
       throw new Error("Invalid username or password")
     }
 
-    // Optional: fetch current user to confirm session
-    await fetch("/auth/me", { credentials: "include" })
+    await fetchCurrentUser()
 
-    router.push("/")
+    const redirectTo = route.query.redirect || "/"
+    router.push(redirectTo)
   } catch (err) {
     error.value = err.message || "Login failed"
   } finally {
