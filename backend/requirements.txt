@@ -1,2 +1,29 @@
+# -------------------------
+# Core FastAPI
+# -------------------------
 fastapi
 uvicorn[standard]
+
+# -------------------------
+# Database / ORM
+# -------------------------
+sqlalchemy>=2.0
+alembic
+
+# -------------------------
+# SQLite (built-in, no dep)
+# MySQL (prod)
+# -------------------------
+pymysql
+
+# -------------------------
+# Auth / Security
+# -------------------------
+passlib[bcrypt]
+itsdangerous
+python-multipart
+
+# -------------------------
+# Config / Utils
+# -------------------------
+python-dotenv

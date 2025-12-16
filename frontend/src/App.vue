@@ -1,30 +1,49 @@
-<script setup>
-import HelloWorld from './components/HelloWorld.vue'
-</script>
-
 <template>
   <div>
-    <a href="https://vite.dev" target="_blank">
-      <img src="/vite.svg" class="logo" alt="Vite logo" />
-    </a>
-    <a href="https://vuejs.org/" target="_blank">
-      <img src="./assets/vue.svg" class="logo vue" alt="Vue logo" />
-    </a>
+    <nav class="navbar navbar-expand-lg navbar-light bg-light border-bottom">
+      <div class="container-fluid">
+        <RouterLink class="navbar-brand fw-bold" to="/">
+          SplitPay
+        </RouterLink>
+
+        <button
+          class="navbar-toggler"
+          type="button"
+          data-bs-toggle="collapse"
+          data-bs-target="#navbarMain"
+        >
+          <span class="navbar-toggler-icon"></span>
+        </button>
+
+        <div class="collapse navbar-collapse" id="navbarMain">
+          <ul class="navbar-nav me-auto mb-2 mb-lg-0">
+            <li class="nav-item">
+              <RouterLink class="nav-link" to="/">Home</RouterLink>
+            </li>
+            <li class="nav-item">
+              <RouterLink class="nav-link" to="/groups">Groups</RouterLink>
+            </li>
+          </ul>
+
+          <div class="d-flex gap-2">
+            <RouterLink to="/login" class="btn btn-outline-secondary btn-sm">
+              Login
+            </RouterLink>
+            <RouterLink to="/register" class="btn btn-primary btn-sm">
+              Sign up
+            </RouterLink>
+          </div>
+        </div>
+      </div>
+    </nav>
+
+    <!-- Page content -->
+    <main class="container mt-4">
+      <RouterView />
+    </main>
   </div>
-  <HelloWorld msg="Vite + Vue" />
 </template>
 
-<style scoped>
-.logo {
-  height: 6em;
-  padding: 1.5em;
-  will-change: filter;
-  transition: filter 300ms;
-}
-.logo:hover {
-  filter: drop-shadow(0 0 2em #646cffaa);
-}
-.logo.vue:hover {
-  filter: drop-shadow(0 0 2em #42b883aa);
-}
-</style>
+<script setup>
+import { RouterLink, RouterView } from "vue-router"
+</script>
