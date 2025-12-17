@@ -23,9 +23,9 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY backend/requirements.txt .
+COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --upgrade pip \
-    && pip install -r requirements.txt
+    && pip install -r backend/requirements.txt
 
 COPY backend /app/backend
 COPY --from=frontend-builder /workspace/frontend/dist /app/frontend/dist
