@@ -4,9 +4,11 @@ from typing import List, Iterable
 import bcrypt
 from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
 from fastapi import FastAPI, Depends, HTTPException, Response, Request, status, WebSocket, WebSocketDisconnect, BackgroundTasks
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session
-from backend.db import get_db, SessionLocal
+from backend.db import get_db, SessionLocal, Base, engine
 from backend.crud.users import get_user_by_username, create_user, get_user_by_email, update_user
 from backend.crud.groups import (
     create_group as persist_group,
@@ -35,6 +37,25 @@ from backend.crud.settlements import (
 )
 from backend.models.group import Group, GroupInvite, GroupMember, Expense, Settlement
 app = FastAPI()
+
+FRONTEND_DIST = os.getenv(
+    "FRONTEND_DIST",
+    os.path.join(os.path.dirname(__file__), "..", "frontend", "dist")
+)
+FRONTEND_INDEX = os.path.join(FRONTEND_DIST, "index.html")
+
+if os.path.isdir(os.path.join(FRONTEND_DIST, "assets")):
+    app.mount("/assets", StaticFiles(directory=os.path.join(FRONTEND_DIST, "assets")), name="frontend-assets")
+
+
+def ensure_database():
+    from backend.models import user, group  # noqa: F401
+    Base.metadata.create_all(bind=engine)
+
+
+@app.on_event("startup")
+def startup_event():
+    ensure_database()
 
 
 #Models
@@ -1016,3 +1037,16 @@ async def notifications_socket(websocket: WebSocket):
             manager.disconnect(user.id, websocket)
     finally:
         db.close()
+
+
+if os.path.isfile(FRONTEND_INDEX):
+
+    @app.get("/", include_in_schema=False)
+    async def serve_frontend_root():
+        return FileResponse(FRONTEND_INDEX)
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def serve_frontend_app(full_path: str):
+        if full_path.startswith("api") or full_path.startswith("ws"):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+        return FileResponse(FRONTEND_INDEX)
