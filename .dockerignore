@@ -1,0 +1,13 @@
+.git
+.gitignore
+.gcloudignore
+dev.db
+node_modules
+frontend/node_modules
+backend/.venv
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+dist/
+.DS_Store

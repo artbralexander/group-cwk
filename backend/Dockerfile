@@ -1,10 +1,12 @@
 FROM node:20-bookworm AS frontend-builder
 
-WORKDIR /app/frontend
-COPY frontend/package*.json ./ 
-RUN npm install --no-audit --no-fund
-COPY frontend/ .
-RUN npm run build
+WORKDIR /workspace
+COPY . .
+RUN if [ -f frontend/package.json ]; then \
+      cd frontend && npm install --no-audit --no-fund && npm run build; \
+    else \
+      mkdir -p frontend/dist; \
+    fi
 
 FROM python:3.12-slim AS base
 
@@ -26,7 +28,7 @@ RUN pip install --upgrade pip \
     && pip install -r requirements.txt
 
 COPY backend /app/backend
-COPY --from=frontend-builder /app/frontend/dist /app/frontend/dist
+COPY --from=frontend-builder /workspace/frontend/dist /app/frontend/dist
 
 EXPOSE ${PORT}
 
