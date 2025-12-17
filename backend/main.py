@@ -556,6 +556,7 @@ def update_group_endpoint(
     payload: GroupUpdateRequest,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
 ):
     group = get_group_with_members(db, group_id)
     if not group:
@@ -582,7 +583,15 @@ def update_group_endpoint(
         db.commit()
         db.refresh(group)
 
-    return serialize_group(group)
+    group_payload = serialize_group(group)
+    if updated:
+        notify_group_members(
+            background_tasks,
+            group,
+            {"type": "group_updated", "data": group_payload.dict()},
+            exclude_user_ids=[current_user.id],
+        )
+    return group_payload
 
 
 @app.get("/api/groups/{group_id}", response_model=GroupResponse)
@@ -615,6 +624,11 @@ def leave_group(
     membership = next((member for member in group.members if member.user_id == current_user.id), None)
     if not membership:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="You are not a member of this group")
+    if group.owner_id == current_user.id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Group owners must delete the group instead of leaving",
+        )
 
     expenses = list_expenses_for_group(db, group_id)
     records = list_settlements_for_group(db, group_id)
@@ -627,6 +641,41 @@ def leave_group(
         )
 
     db.delete(membership)
+    db.commit()
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.delete("/api/groups/{group_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_group_endpoint(
+    group_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    group = get_group_with_members(db, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    if group.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only the owner can delete this group")
+
+    expenses = list_expenses_for_group(db, group_id)
+    records = list_settlements_for_group(db, group_id)
+    applied_records = [record for record in records if record.status in SETTLEMENT_APPLIED_STATUSES]
+    balances = calculate_member_balances(group, expenses, applied_records)
+    if any(amount != 0 for amount in balances.values()):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Settle all outstanding balances before deleting the group",
+        )
+
+    for record in records:
+        db.delete(record)
+    for expense in expenses:
+        db.delete(expense)
+    invites = db.query(GroupInvite).filter(GroupInvite.group_id == group_id).all()
+    for invite in invites:
+        db.delete(invite)
+
+    db.delete(group)
     db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

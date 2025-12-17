@@ -1,6 +1,6 @@
 <template>
   <div class="container py-4">
-    <div class="d-flex justify-content-between align-items-center mb-4">
+    <div class="d-flex justify-content-between align-items-center mb-4 flex-wrap gap-2">
       <div>
         <h2 class="mb-0">Your Groups</h2>
         <p class="text-muted mb-0">Track shared expenses with friends and family.</p>
@@ -166,7 +166,8 @@ const {
   fetchGroups,
   createGroup,
   creatingGroup,
-  createGroupError
+  createGroupError,
+  connectToGroupUpdates
 } = useGroups()
 const {
   invites,
@@ -238,5 +239,7 @@ onMounted(() => {
   fetchGroups()
   fetchInvites()
   connectToInviteSocket()
+  connectToGroupUpdates()
 })
+
 </script>

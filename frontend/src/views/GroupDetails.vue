@@ -84,13 +84,33 @@
             </li>
           </ul>
           <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-3">
-            <small class="text-muted mb-0">Leaving removes your access once all balances are clear.</small>
-            <button class="btn btn-outline-danger btn-sm" type="button" :disabled="leavingGroup" @click="handleLeaveGroup">
+            <small class="text-muted mb-0" v-if="isOwner">
+              Owners can’t leave. Delete the group once all balances are settled.
+            </small>
+            <small class="text-muted mb-0" v-else>Leaving removes your access once all balances are clear.</small>
+            <button
+              v-if="isOwner"
+              class="btn btn-danger btn-sm"
+              type="button"
+              :disabled="deletingGroup"
+              @click="handleDeleteGroup"
+            >
+              <span v-if="deletingGroup" class="spinner-border spinner-border-sm me-2"></span>
+              Delete group
+            </button>
+            <button
+              v-else
+              class="btn btn-outline-danger btn-sm"
+              type="button"
+              :disabled="leavingGroup"
+              @click="handleLeaveGroup"
+            >
               <span v-if="leavingGroup" class="spinner-border spinner-border-sm me-2"></span>
               Leave group
             </button>
           </div>
-          <p v-if="leaveError" class="text-danger small mt-2 mb-0">{{ leaveError }}</p>
+          <p v-if="!isOwner && leaveError" class="text-danger small mt-2 mb-0">{{ leaveError }}</p>
+          <p v-if="isOwner && deleteGroupError" class="text-danger small mt-2 mb-0">{{ deleteGroupError }}</p>
         </div>
       </div>
 
@@ -143,13 +163,23 @@
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
             <h5 class="card-title mb-0">Expenses</h5>
-            <RouterLink
-              v-if="route.params.id"
-              class="btn btn-outline-secondary btn-sm"
-              :to="{ name: 'GroupStats', params: { id: route.params.id } }"
-            >
-              View insights
-            </RouterLink>
+            <div class="d-flex gap-2">
+              <button
+                class="btn btn-outline-secondary btn-sm"
+                type="button"
+                :disabled="expenses.length === 0"
+                @click="exportExpensesCsv"
+              >
+                Export CSV
+              </button>
+              <RouterLink
+                v-if="route.params.id"
+                class="btn btn-outline-secondary btn-sm"
+                :to="{ name: 'GroupStats', params: { id: route.params.id } }"
+              >
+                View insights
+              </RouterLink>
+            </div>
           </div>
           <div v-if="expensesError" class="alert alert-danger">{{ expensesError }}</div>
           <div v-else-if="loadingExpenses" class="text-center py-3">
@@ -432,7 +462,16 @@ import { useAuth } from "../composables/useAuth"
 
 const route = useRoute()
 const router = useRouter()
-const { activeGroup: group, loadingGroup, groupError, fetchGroup, fetchGroups, updateGroup } = useGroups()
+const {
+  activeGroup: group,
+  loadingGroup,
+  groupError,
+  fetchGroup,
+  fetchGroups,
+  updateGroup,
+  deleteGroup,
+  connectToGroupUpdates
+} = useGroups()
 const { currentUser } = useAuth()
 const inviteForm = reactive({ username: "" })
 const inviteLoading = ref(false)
@@ -471,6 +510,8 @@ const recordingSettlementKey = ref("")
 const confirmingSettlementId = ref(null)
 const leavingGroup = ref(false)
 const leaveError = ref("")
+const deletingGroup = ref(false)
+const deleteGroupError = ref("")
 const showGroupSettings = ref(false)
 const savingGroupSettings = ref(false)
 const groupSettingsError = ref("")
@@ -486,7 +527,7 @@ const currencySymbols = {
   AUD: "$",
   JPY: "¥"
 }
-const currencyOptions = Object.keys(currencySymbols)
+const currencyOptions = ["GBP", "USD", "EUR", "CAD", "AUD", "JPY"]
 const currencyCode = computed(() => group.value?.currency || "GBP")
 const currencySymbol = computed(() => currencySymbols[currencyCode.value] || currencyCode.value + " ")
 const currentUsername = computed(() => currentUser.value?.username || "")
@@ -495,7 +536,10 @@ const isOwner = computed(
 )
 
 function displayMemberName(username) {
-  return username === currentUsername.value ? "Me" : username
+  if (!username) {
+    return "Unknown"
+  }
+  return username === currentUsername.value ? `${username} (you)` : username
 }
 
 function resetGroupSettingsForm() {
@@ -538,6 +582,42 @@ async function saveGroupSettings() {
   } finally {
     savingGroupSettings.value = false
   }
+}
+
+function exportExpensesCsv() {
+  const header = ["Description", "Amount", "Paid By", "Created At", "Splits"]
+  const rows = expenses.value.map((expense) => {
+    const splits = (expense.splits || [])
+      .map((split) => `${split.username}: ${Number(split.amount).toFixed(2)}`)
+      .join("; ")
+    return [
+      expense.description || "",
+      Number(expense.amount || 0).toFixed(2),
+      expense.paid_by || "",
+      expense.created_at ? new Date(expense.created_at).toLocaleString() : "",
+      splits
+    ]
+  })
+  const csvLines = [header, ...rows]
+    .map((row) =>
+      row
+        .map((value) => {
+          const str = String(value ?? "")
+          return `"${str.replace(/"/g, '""')}"`
+        })
+        .join(",")
+    )
+    .join("\n")
+
+  const blob = new Blob([csvLines], { type: "text/csv;charset=utf-8;" })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement("a")
+  link.href = url
+  link.setAttribute("download", `${group.value?.name || "group"}-expenses.csv`)
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
 function setDefaultPaidBy(members) {
@@ -613,6 +693,27 @@ async function handleLeaveGroup() {
   }
 }
 
+async function handleDeleteGroup() {
+  if (!route.params.id) return
+  const confirmed = window.confirm(
+    "Delete this group? This removes all expense history once everyone is settled."
+  )
+  if (!confirmed) {
+    return
+  }
+  deleteGroupError.value = ""
+  deletingGroup.value = true
+  try {
+    await deleteGroup(route.params.id)
+    await fetchGroups()
+    router.push("/groups")
+  } catch (err) {
+    deleteGroupError.value = err.message || "Failed to delete group"
+  } finally {
+    deletingGroup.value = false
+  }
+}
+
 const expenses = computed(() => expensesByGroup.value[route.params.id] || [])
 const settlementsSummary = computed(() => settlementsByGroup.value[route.params.id] || { recommendations: [], records: [] })
 const settlements = computed(() => settlementsSummary.value.recommendations || [])
@@ -646,6 +747,7 @@ function resetSplitsEqual() {
 watch(
   () => group.value,
   (val) => {
+    deleteGroupError.value = ""
     resetGroupSettingsForm()
     if (val && val.members.length > 0) {
       setDefaultPaidBy(val.members)
@@ -880,6 +982,7 @@ async function handleConfirmSettlement(record) {
 }
 
 onMounted(() => {
+  connectToGroupUpdates()
   connectToExpenseNotifications()
   loadGroup()
 })

@@ -1,4 +1,5 @@
 import { ref } from "vue"
+import { subscribeToNotifications } from "../services/notifications"
 
 const groups = ref([])
 const loadingGroups = ref(false)
@@ -8,6 +9,7 @@ const loadingGroup = ref(false)
 const groupError = ref("")
 const creatingGroup = ref(false)
 const createGroupError = ref("")
+let groupUpdatesUnsubscribe = null
 
 async function fetchGroups() {
   loadingGroups.value = true
@@ -99,14 +101,56 @@ async function updateGroup(groupId, payload) {
       throw new Error(body.detail || "Unable to update group")
     }
     const updated = await res.json()
-    if (activeGroup.value && activeGroup.value.id === updated.id) {
-      activeGroup.value = updated
-    }
-    groups.value = groups.value.map((group) => (group.id === updated.id ? updated : group))
+    applyGroupUpdate(updated)
     return updated
   } catch (err) {
     throw err
   }
+}
+
+function applyGroupUpdate(updatedGroup) {
+  if (!updatedGroup || !updatedGroup.id) {
+    return
+  }
+  if (activeGroup.value && activeGroup.value.id === updatedGroup.id) {
+    activeGroup.value = { ...activeGroup.value, ...updatedGroup }
+  }
+  const existingIndex = groups.value.findIndex((group) => group.id === updatedGroup.id)
+  if (existingIndex >= 0) {
+    const updatedList = [...groups.value]
+    updatedList[existingIndex] = { ...updatedList[existingIndex], ...updatedGroup }
+    groups.value = updatedList
+  }
+}
+
+async function deleteGroup(groupId) {
+  try {
+    const res = await fetch(`/api/groups/${groupId}`, {
+      method: "DELETE",
+      credentials: "include"
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(body.detail || "Unable to delete group")
+    }
+    groups.value = groups.value.filter((group) => group.id !== groupId)
+    if (activeGroup.value && activeGroup.value.id === groupId) {
+      activeGroup.value = null
+    }
+  } catch (err) {
+    throw err
+  }
+}
+
+function connectToGroupUpdates() {
+  if (groupUpdatesUnsubscribe || typeof window === "undefined") {
+    return
+  }
+  groupUpdatesUnsubscribe = subscribeToNotifications("group_updated", (data) => {
+    if (data) {
+      applyGroupUpdate(data)
+    }
+  })
 }
 
 export function useGroups() {
@@ -122,6 +166,8 @@ export function useGroups() {
     fetchGroups,
     fetchGroup,
     createGroup,
-    updateGroup
+    updateGroup,
+    deleteGroup,
+    connectToGroupUpdates
   }
 }
