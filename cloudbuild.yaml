@@ -1,0 +1,14 @@
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - --network
+      - cloudbuild
+      - --no-cache
+      - -f
+      - backend/Dockerfile
+      - -t
+      - europe-west2-docker.pkg.dev/group-cwk/split-app-repo/fullstack:$SHORT_SHA
+      - .
+images:
+  - europe-west2-docker.pkg.dev/group-cwk/split-app-repo/fullstack:$SHORT_SHA
