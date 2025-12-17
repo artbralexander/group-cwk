@@ -94,7 +94,7 @@ async function login() {
 
     await fetchCurrentUser()
 
-    const redirectTo = route.query.redirect || "/"
+    const redirectTo = route.query.redirect || "/groups"
     router.push(redirectTo)
   } catch (err) {
     error.value = err.message || "Login failed"

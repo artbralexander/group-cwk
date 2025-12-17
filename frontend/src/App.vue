@@ -26,9 +26,9 @@
           </ul>
 
           <div class="d-flex align-items-center gap-2" v-if="authLoaded && isAuthenticated">
-            <span class="align-self-center text-muted small">
+            <RouterLink class="align-self-center small text-decoration-none" to="/settings">
               {{ currentUser.username }}
-            </span>
+            </RouterLink>
             <template v-if="confirmingLogout">
               <span class="small text-muted">Confirm logout?</span>
               <button class="btn btn-danger btn-sm" @click="confirmLogout" type="button">

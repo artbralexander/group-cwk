@@ -5,6 +5,9 @@ import About from "../views/About.vue"
 import Login from "../views/Login.vue"
 import Register from "../views/Register.vue"
 import Groups from "../views/Groups.vue"
+import GroupDetails from "../views/GroupDetails.vue"
+import Settings from "../views/Settings.vue"
+import GroupStats from "../views/GroupStats.vue"
 import { useAuth } from "../composables/useAuth"
 
 const routes = [
@@ -32,6 +35,24 @@ const routes = [
     path: "/groups",
     name: "Groups",
     component: Groups,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/groups/:id",
+    name: "GroupDetails",
+    component: GroupDetails,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/groups/:id/stats",
+    name: "GroupStats",
+    component: GroupStats,
+    meta: { requiresAuth: true }
+  },
+  {
+    path: "/settings",
+    name: "Settings",
+    component: Settings,
     meta: { requiresAuth: true }
   }
 ]
