@@ -1050,4 +1050,3 @@ if os.path.isfile(FRONTEND_INDEX):
         if full_path.startswith("api") or full_path.startswith("ws"):
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         return FileResponse(FRONTEND_INDEX)
- 
