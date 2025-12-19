@@ -4,6 +4,7 @@
     "concurrently": "^9.0.0"
   },
   "scripts": {
+    "setup": "bash scripts/setup.sh",
     "dev": "concurrently -n frontend,backend \"npm --prefix frontend run dev\" \"./backend/.venv/bin/python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000\""
   }
 }
