@@ -33,18 +33,46 @@ class GroupMember(Base):
     # Avoid circular import by using string for target; SQLAlchemy resolves at runtime
     user: Mapped["User"] = relationship("User")
 
+class GroupCategory(Base):
+    __tablename__ = "group_categories"
+    __table_args__ = (UniqueConstraint("group_id","name",name="uq_group_category_name"),)
+    
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), index=True)
+
+    name: Mapped[str] = mapped_column(String(50))
+    description: Mapped[str] = mapped_column(String(255))
+    budget: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    group: Mapped["Group"] = relationship("Group")
+    splits: Mapped[List["CategorySplit"]] = relationship("CategorySplit",back_populates="category",cascade="all, delete-orphan")
+    expenses: Mapped[List["Expense"]] = relationship("Expense", back_populates="category")
+
+class CategorySplit(Base):
+    __tablename__ = "category_splits"
+    __table_args__ = (UniqueConstraint("category_id","user_id",name="uq_category_split_user"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    category_id: Mapped[int] = mapped_column(ForeignKey("group_categories.id"),index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    share: Mapped[int] = mapped_column(Integer)
+    category: Mapped["GroupCategory"] = relationship("GroupCategory",back_populates="splits")
+    user: Mapped["User"] = relationship("User")
 
 class Expense(Base):
     __tablename__ = "expenses"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"))
+    category_id: Mapped[int] = mapped_column(ForeignKey("group_categories.id"), index=True, nullable=True)
     description: Mapped[str] = mapped_column(String(255))
     amount: Mapped[int] = mapped_column(Integer)  # stored as cents
     paid_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     group: Mapped["Group"] = relationship("Group")
+    category: Mapped["GroupCategory"] = relationship("GroupCategory",back_populates="expenses")
     paid_by: Mapped["User"] = relationship("User")
     splits: Mapped[List["ExpenseSplit"]] = relationship(
         "ExpenseSplit", back_populates="expense", cascade="all, delete-orphan"

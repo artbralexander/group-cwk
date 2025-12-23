@@ -128,7 +128,21 @@
             </div>
           </div>
         </div>
-
+        <div class ='col-lg-6'>
+          <div class="card h-100">
+            <div class="card-body d-flex flex-column">
+              <h5 class="card-title">Add category</h5>
+              <p class="text-muted flex-grow-1">
+                Record new group expense categories, split them equally or customize shares, and edit or delete them later.
+              </p>
+              <button class="btn btn-success mt-3" type="button" @click="openCategoryModal()">
+                Add category
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="row g-4">
         <div class="col-lg-6">
           <div class="card h-100">
             <div class="card-body">
@@ -353,6 +367,15 @@
                   </select>
                 </div>
 
+                <div class="col-6">
+                  <label class="form-label" for="modalExpenseCategory">Category</label>
+                  <select id="modalExpenseCategory" v-model="expenseForm.category_id" class="form-select">
+                    <option :value="null">Other</option>
+                    <option v-for="category in categories":key="category.id":value="category.id">{{ category.name }}</option>
+                  </select>
+                  <small class="text-muted">Optional - if selected, splits follow category rules</small>
+                </div>
+
                 <div class="col-12">
                   <label class="form-label">Split type</label>
                   <div class="btn-group w-100">
@@ -450,6 +473,66 @@
         </div>
       </div>
     </div>
+    <div v-if="showCategoryModal">
+      <div class="modal-backdrop fade show"></div>
+      <div class="modal d-block" tabindex="-1">
+        <div class="modal-dialog modal-lg modal-dialog-centered">
+          <div class="modal-content">
+            <div class="modal-header">
+              <h5 class="modal-title">Add Category</h5>
+              <button type="button" class="btn-close" @click="closeCategoryModal"></button>
+            </div>
+            <div class="modal-body">
+              <form class="row g-3" @submit.prevent="saveCategory">
+                <div class="col-12">
+                  <label class="form-label">Name</label>
+                  <input v-model.trim="categoryForm.name" class="form-control" required />
+                </div>
+                <div class="col-12">
+                  <label class="form-label">Description</label>
+                  <textarea v-model.trim="categoryForm.description" class="form-control"></textarea>
+                </div>
+                <div class="col-6">
+                  <label class="form-label">Budget</label>
+                  <input v-model.number="categoryForm.budget" type="number" min="0" step="0.01" class="form-control"/>
+                </div>
+                <div class="col-12">
+                  <label class="form-label">Split Shares</label>
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Member</th>
+                        <th class="text-end">Share</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="split in categoryForm.splits" :key="split.username">
+                        <td>{{ displayMemberName(split.username) }}</td>
+                        <td>
+                          <input type="number" min="1" step="1" class="form-control text-end" v-model.number="split.share"/>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                  <small class="text-muted">
+                    Shares are in ratios (e.g. 2 = pays twice as much as 1).
+                  </small>
+                </div>
+                <div class="col-12">
+                  <div v-if="categoryError" class="alert alert-danger py-2">
+                    {{ categoryError }}
+                  </div>
+                  <button class="btn btn-success w-100" :disabled="creatingCategory">
+                    <span v-if="creatingCategory" class="spinner-border spinner-border-sm me-2"></span>
+                    Create Category
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -459,9 +542,18 @@ import { useRoute, useRouter, RouterLink } from "vue-router"
 import { useGroups } from "../composables/useGroups"
 import { useExpenses } from "../composables/useExpenses"
 import { useAuth } from "../composables/useAuth"
+import { useCategories } from "../composables/useCategories"
 
 const route = useRoute()
 const router = useRouter()
+const groupId = computed(() => route.params.id)
+const{
+  categories,
+  loadingCategories,
+  categoriesError,
+  fetchCategories,
+  createCategory
+} = useCategories(groupId)
 const {
   activeGroup: group,
   loadingGroup,
@@ -498,8 +590,19 @@ const expenseForm = reactive({
   description: "",
   amount: 0,
   paidBy: "",
-  splitMode: "equal"
+  splitMode: "equal",
+  category_id:null
 })
+const categoryForm=reactive({
+  name:"",
+  description:"",
+  budget:0,
+  splits:[]
+})
+
+const showCategoryModal = ref(false)
+const creatingCategory = ref(false)
+const categoryError = ref("")
 const customSplits = reactive([])
 const expenseError = ref("")
 const showExpenseModal = ref(false)
@@ -549,6 +652,48 @@ function resetGroupSettingsForm() {
   } else {
     groupSettingsForm.name = ""
     groupSettingsForm.currency = "GBP"
+  }
+}
+function openCategoryModal(){
+  categoryError.value = ""
+  showCategoryModal.value = true
+}
+
+function closeCategoryModal(){
+  showCategoryModal.value = false
+  categoryError.value = ""
+  categoryForm.name = ""
+  categoryForm.description=""
+  categoryForm.budget = 0
+}
+
+async function saveCategory(){
+  if (!route.params.id) return
+  categoryError.value = ""
+
+  if (!categoryForm.name.trim()){
+    categoryError.value ="Category name is required"
+    return
+  }
+
+  creatingCategory.value = true
+  try{
+    await createCategory({
+      name:categoryForm.name,
+      description: categoryForm.description,
+      budget: Math.round(Number(categoryForm.budget ||0)*100),
+      splits: categoryForm.splits.map((split)=> ({
+        username:split.username,
+        share: split.share
+      }))
+    })
+    closeCategoryModal()
+    await fetchCategories()
+  }
+  catch (err){
+    categoryError.value = err.message || "Failed to create category"
+  } finally{
+    creatingCategory.value = false
   }
 }
 
@@ -765,6 +910,17 @@ watch(
 )
 
 watch(
+  () => group.value,
+  (val) => {
+    if (!val) return
+    categoryForm.splits = val.members.map((member) => ({
+      username: member.username,
+      share:1
+    }))
+  },{immediate: true}
+)
+
+watch(
   () => expenseForm.amount,
   () => {
     if (expenseForm.splitMode === "equal") {
@@ -790,6 +946,14 @@ watch(
     }
   },
   { deep: true }
+)
+watch(
+  () => route.params.id,
+  (id) => {
+    if (id) {
+      fetchCategories()
+    }
+  }, {immediate: true}
 )
 
 watch(
@@ -849,7 +1013,8 @@ async function saveExpense() {
       description: expenseForm.description,
       amount: Number(expenseForm.amount),
       paid_by: expenseForm.paidBy,
-      splits: splitsPayload
+      splits: splitsPayload,
+      category_id: expenseForm.category_id
     }
 
     if (isEditingExpense.value) {
@@ -881,6 +1046,7 @@ function closeExpenseModal() {
   }
 }
 
+
 async function openExpenseModal(expense = null) {
   expenseError.value = ""
   if (!group.value) return
@@ -890,6 +1056,7 @@ async function openExpenseModal(expense = null) {
     expenseForm.amount = Number(expense.amount)
     expenseForm.paidBy = expense.paid_by
     expenseForm.splitMode = "custom"
+    expenseForm.category_id= expense.category_id ?? null
     await nextTick()
     customSplits.forEach((split) => {
       const match = expense.splits.find((s) => s.username === split.username)
@@ -900,6 +1067,7 @@ async function openExpenseModal(expense = null) {
     expenseForm.description = ""
     expenseForm.amount = 0
     setDefaultPaidBy(group.value.members)
+    expenseForm.category_id = null
     expenseForm.splitMode = "equal"
     equalSelectedMembers.value = group.value.members.map((member) => member.username)
     await nextTick()

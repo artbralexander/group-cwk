@@ -7,7 +7,7 @@ from fastapi import FastAPI, Depends, HTTPException, Response, Request, status, 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 from backend.db import get_db, SessionLocal, Base, engine
 from backend.crud.users import get_user_by_username, create_user, get_user_by_email, update_user
 from backend.crud.groups import (
@@ -35,7 +35,7 @@ from backend.crud.settlements import (
     get_settlement,
     confirm_settlement,
 )
-from backend.models.group import Group, GroupInvite, GroupMember, Expense, Settlement
+from backend.models.group import Group, GroupInvite, GroupMember, Expense, Settlement, GroupCategory, CategorySplit
 app = FastAPI()
 
 FRONTEND_DIST = os.getenv(
@@ -76,6 +76,23 @@ class UserResponse(BaseModel):
     id: int
     username: str
     email: EmailStr | None = None
+
+class CategorySplitInput(BaseModel):
+    username: str
+    share: int
+
+class CategoryCreateRequest(BaseModel):
+    name:str
+    description: str | None = None
+    budget: int | None = None
+    splits: List[CategorySplitInput]
+
+class CategoryResponse(BaseModel):
+    id: int
+    name: str
+    description: str| None
+    budget: float | None
+
 
 
 class GroupMemberResponse(BaseModel):
@@ -133,6 +150,7 @@ class ExpenseCreateRequest(BaseModel):
     paid_by: str
     splits: List[ExpenseSplitInput]
     split_members: List[str] | None = None
+    category_id: int | None= None
 
 
 class ExpenseSplitResponse(BaseModel):
@@ -146,6 +164,7 @@ class ExpenseResponse(BaseModel):
     amount: float
     paid_by: str
     created_at: str
+    category_id: int | None = None
     splits: List[ExpenseSplitResponse]
 
 
@@ -321,6 +340,14 @@ def serialize_group(group: Group) -> GroupResponse:
         owner_id=group.owner_id,
     )
 
+def serialize_category(category: GroupCategory) -> CategoryResponse:
+    return CategoryResponse(
+        id=category.id,
+        name=category.name,
+        description=category.description,
+        budget=cents_to_dollars(category.budget) if category.budget else None
+    )
+
 
 def serialize_invite(invite: GroupInvite) -> InviteResponse:
     return InviteResponse(
@@ -339,6 +366,7 @@ def serialize_expense(expense: Expense) -> ExpenseResponse:
         amount=cents_to_dollars(expense.amount),
         paid_by=expense.paid_by.username if expense.paid_by else "",
         created_at=expense.created_at.isoformat(),
+        category_id=expense.category_id,
         splits=[
             ExpenseSplitResponse(
                 username=split.user.username if split.user else "",
@@ -570,6 +598,58 @@ def create_group_endpoint(
     group_with_members = get_group_with_members(db, group.id) or group
     return serialize_group(group_with_members)
 
+@app.get("/api/groups/{group_id}/categories",response_model=List[CategoryResponse])
+def list_group_categories(
+    group_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    group = get_group_with_members(db,group_id=group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND,detail="Group not found")
+    
+    if not any(member.user_id == current_user.id for member in group.members):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access Denied")
+    
+    categories = (db.query(GroupCategory).filter(GroupCategory.group_id == group_id).all())
+    return [serialize_category(category) for category in categories]
+
+@app.post("/api/groups/{group_id}/categories",response_model=CategoryResponse,status_code=status.HTTP_201_CREATED)
+def create_group_category(
+    group_id:int,
+    payload: CategoryCreateRequest,
+    current_user= Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    group = get_group_with_members(db,group_id=group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    if group.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner can only make categories")
+    if not payload.name.strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category name is required")
+    
+    category = GroupCategory(
+        group_id=group_id,
+        name=payload.name.strip(),
+        description=payload.description or "",
+        budget=payload.budget or 0
+    )
+    db.add(category)
+    db.flush()
+
+    member_map = {member.user.username: member.user_id for member in group.members}
+
+    for split in payload.splits:
+        user_id = member_map.get(split.username)
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{split.username} not in the group")
+        db.add(CategorySplit(category_id=category.id,user_id=user_id,share=split.share))
+    db.commit()
+    db.refresh(category)
+    return serialize_category(category=category)
+
+    
 
 @app.put("/api/groups/{group_id}", response_model=GroupResponse)
 def update_group_endpoint(
@@ -726,6 +806,45 @@ def validate_expense_payload(group, payload: ExpenseCreateRequest):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Splits must sum to total amount")
     return member_map[payload.paid_by], split_items, amount_cents
 
+def derive_splits_from_category(
+        *,
+        db:Session,
+        group,
+        category_id:int,
+        amount:int,
+        paid_by_id:int,
+)-> list[dict]:
+    category = (db.query(GroupCategory).options(selectinload(GroupCategory.splits)).filter(GroupCategory.id == category_id, GroupCategory.group_id == group.id).first())
+
+    if not category:
+        raise HTTPException(
+            status_code=status.HTTP_404_BAD_REQUEST,
+            detail="Invalid Category",)
+    
+    if not category.splits:
+        raise HTTPException(
+            status_code=status.HTTP_404_BAD_REQUEST,
+            detail="Category has no split ratios",)
+    total_shares = sum(cat_split.share for cat_split in category.splits)
+    if total_shares <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_404_BAD_REQUEST,
+            detail="Invalid category split config",)
+    
+    splits = []
+    allocated = 0
+    for cat_split in category.splits:
+        share_amount= (amount*cat_split.share)//total_shares
+        splits.append({"user_id":cat_split.user_id,"amount_cents":share_amount})
+        allocated += share_amount
+    remainder = amount - allocated
+    if remainder >0:
+        for split in splits:
+            if split["user_id"] == paid_by_id:
+                split["amount_cents"] += remainder
+                break
+    return splits
+
 
 @app.get("/api/groups/{group_id}/expenses", response_model=List[ExpenseResponse])
 def get_group_expenses(
@@ -757,13 +876,24 @@ def create_group_expense(
     if not any(member.user_id == current_user.id for member in group.members):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
-    payer, split_items, amount_cents = validate_expense_payload(group, payload)
+    amount_cents = dollars_to_cents(payload.amount)
+    member_map = {m.user.username: m.user for m in group.members if m.user}
+    payer = member_map.get(payload.paid_by)
+    if not payer:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Payer must be in group")
+    if payload.category_id is not None:
+        split_items = derive_splits_from_category(db=db,group=group,category_id=payload.category_id,amount=amount_cents,paid_by_id=payer.id)
+    else:
+        _, split_items,_ = validate_expense_payload(group,payload)
     expense = create_expense(
         db,
         group_id=group_id,
         description=payload.description.strip(),
         amount_cents=amount_cents,
         paid_by_id=payer.id,
+        category_id=payload.category_id,
         splits=split_items,
     )
     expenses = list_expenses_for_group(db, group_id)
@@ -803,6 +933,7 @@ def update_group_expense(
         description=payload.description.strip(),
         amount_cents=amount_cents,
         paid_by_id=payer.id,
+        category_id= payload.category_id,
         splits=split_items,
     )
     updated = get_expense(db, expense_id) or expense

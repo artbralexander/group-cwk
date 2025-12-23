@@ -10,9 +10,10 @@ def create_expense(
     description: str,
     amount_cents: int,
     paid_by_id: int,
+    category_id:int|None,
     splits: List[dict],
 ) -> Expense:
-    expense = Expense(group_id=group_id, description=description, amount=amount_cents, paid_by_id=paid_by_id)
+    expense = Expense(group_id=group_id, description=description, amount=amount_cents, paid_by_id=paid_by_id, category_id=category_id)
     db.add(expense)
     db.flush()
 
@@ -62,11 +63,13 @@ def update_expense(
     description: str,
     amount_cents: int,
     paid_by_id: int,
+    category_id: int|None,
     splits: List[dict],
 ) -> Expense:
     expense.description = description
     expense.amount = amount_cents
     expense.paid_by_id = paid_by_id
+    expense.category_id = category_id
 
     db.query(ExpenseSplit).filter(ExpenseSplit.expense_id == expense.id).delete()
     db.flush()
