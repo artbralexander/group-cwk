@@ -33,3 +33,69 @@ Backend runs at `http://127.0.0.1:8000`, frontend at the Vite dev URL printed in
 docker build -f backend/Dockerfile -t split-app .
 docker run --rm -p 8080:8080 split-app
 ```
+
+```
+group-cwk
+├─ .dockerignore
+├─ backend
+│  ├─ crud
+│  │  ├─ category.py
+│  │  ├─ expenses.py
+│  │  ├─ groups.py
+│  │  ├─ invites.py
+│  │  ├─ settlements.py
+│  │  └─ users.py
+│  ├─ db.py
+│  ├─ Dockerfile
+│  ├─ email.py
+│  ├─ init_db.py
+│  ├─ main.py
+│  ├─ models
+│  │  ├─ group.py
+│  │  └─ user.py
+│  └─ requirements.txt
+├─ cloudbuild.yaml
+├─ dev.db
+├─ frontend
+│  ├─ index.html
+│  ├─ package-lock.json
+│  ├─ package.json
+│  ├─ public
+│  │  └─ vite.svg
+│  ├─ README.md
+│  ├─ src
+│  │  ├─ App.vue
+│  │  ├─ assets
+│  │  │  └─ vue.svg
+│  │  ├─ components
+│  │  │  └─ HelloWorld.vue
+│  │  ├─ composables
+│  │  │  ├─ useAuth.js
+│  │  │  ├─ useCategories.js
+│  │  │  ├─ useExpenses.js
+│  │  │  ├─ useGroups.js
+│  │  │  └─ useInvites.js
+│  │  ├─ main.js
+│  │  ├─ router
+│  │  │  └─ index.js
+│  │  ├─ services
+│  │  │  └─ notifications.js
+│  │  ├─ style.css
+│  │  └─ views
+│  │     ├─ About.vue
+│  │     ├─ GroupDetails.vue
+│  │     ├─ Groups.vue
+│  │     ├─ GroupStats.vue
+│  │     ├─ Home.vue
+│  │     ├─ Login.vue
+│  │     ├─ Register.vue
+│  │     └─ Settings.vue
+│  └─ vite.config.js
+├─ package-lock.json
+├─ package.json
+├─ README.md
+└─ scripts
+   ├─ setup.ps1
+   └─ setup.sh
+
+```

@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import func
 from backend.db import get_db, SessionLocal, Base, engine
 from backend.crud.users import get_user_by_username, create_user, get_user_by_email, update_user
 from backend.crud.groups import (
@@ -35,7 +36,7 @@ from backend.crud.settlements import (
     get_settlement,
     confirm_settlement,
 )
-from backend.models.group import Group, GroupInvite, GroupMember, Expense, Settlement, GroupCategory, CategorySplit
+from backend.models.group import Group, GroupInvite, GroupMember, Expense, Settlement, GroupCategory, CategorySplit, ExpenseSplit
 app = FastAPI()
 
 FRONTEND_DIST = os.getenv(
@@ -193,6 +194,22 @@ class SettlementSummaryResponse(BaseModel):
 class SettlementRecordRequest(BaseModel):
     receiver: str
     amount: float
+    
+    
+class GroupSpendingSummary(BaseModel):
+    group_id: int
+    group_name: str
+    currency: str
+    paid: float
+    owed: float
+    net: float
+
+
+class ProfileSpendingSummaryResponse(BaseModel):
+    overall_paid: float
+    overall_owed: float
+    overall_net: float
+    groups: List[GroupSpendingSummary]
 
 
 SETTLEMENT_APPLIED_STATUSES = {"payer_confirmed", "complete"}
@@ -562,6 +579,87 @@ def update_profile(
     )
 
     return UserResponse(id=updated_user.id, username=updated_user.username, email=updated_user.email)
+
+
+@app.get("/api/profile/spending-summary", response_model=ProfileSpendingSummaryResponse)
+def profile_spending_summary(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user_id = current_user.id
+
+    # Groups the user curently belongs to
+    member_groups = (
+        db.query(Group.id, Group.name, Group.currency)
+        .join(GroupMember, GroupMember.group_id == Group.id)
+        .filter(GroupMember.user_id == user_id)
+        .all()
+    )
+
+    if not member_groups:
+        return ProfileSpendingSummaryResponse(
+            overall_paid=0.0,
+            overall_owed=0.0,
+            overall_net=0.0,
+            groups=[],
+        )
+
+    group_ids = [g.id for g in member_groups]
+
+    paid_rows = (
+        db.query(Expense.group_id, func.coalesce(func.sum(Expense.amount), 0).label("paid_cents"))
+        .filter(Expense.group_id.in_(group_ids))
+        .filter(Expense.paid_by_id == user_id)
+        .group_by(Expense.group_id)
+        .all()
+    )
+    paid_map = {row.group_id: int(row.paid_cents or 0) for row in paid_rows}
+
+    owed_rows = (
+        db.query(Expense.group_id, func.coalesce(func.sum(ExpenseSplit.amount), 0).label("owed_cents"))
+        .join(Expense, Expense.id == ExpenseSplit.expense_id)
+        .filter(Expense.group_id.in_(group_ids))
+        .filter(ExpenseSplit.user_id == user_id)
+        .group_by(Expense.group_id)
+        .all()
+    )
+    owed_map = {row.group_id: int(row.owed_cents or 0) for row in owed_rows}
+
+    groups_payload: List[GroupSpendingSummary] = []
+    total_paid_cents = 0
+    total_owed_cents = 0
+
+    for g in member_groups:
+        paid_cents = paid_map.get(g.id, 0)
+        owed_cents = owed_map.get(g.id, 0)
+        total_paid_cents += paid_cents
+        total_owed_cents += owed_cents
+
+        paid = cents_to_dollars(paid_cents)
+        owed = cents_to_dollars(owed_cents)
+        groups_payload.append(
+            GroupSpendingSummary(
+                group_id=g.id,
+                group_name=g.name,
+                currency=g.currency,
+                paid=paid,
+                owed=owed,
+                net=paid - owed,
+            )
+        )
+
+    overall_paid = cents_to_dollars(total_paid_cents)
+    overall_owed = cents_to_dollars(total_owed_cents)
+
+    #Sorts by absolute net descending
+    groups_payload.sort(key=lambda x: abs(x.net), reverse=True)
+
+    return ProfileSpendingSummaryResponse(
+        overall_paid=overall_paid,
+        overall_owed=overall_owed,
+        overall_net=overall_paid - overall_owed,
+        groups=groups_payload,
+    )
 
 
 @app.get("/api/groups", response_model=List[GroupResponse])

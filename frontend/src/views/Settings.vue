@@ -84,6 +84,70 @@
             </form>
           </div>
         </div>
+        <div class="card mt-4">
+          <div class="card-body">
+            <h3 class="card-title mb-4">Spending summary</h3>
+
+            <div v-if="loadingSummary">Loading…</div>
+            <div v-else-if="summaryError" class="alert alert-danger py-2">{{ summaryError }}</div>
+
+            <div v-else-if="summary">
+              <div class="row g-3 mb-3">
+                <div class="col-md-4">
+                  <div class="border rounded p-3">
+                    <div class="text-muted">Total paid</div>
+                    <div class="fs-5">{{ summary.overall_paid.toFixed(2) }}</div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="border rounded p-3">
+                    <div class="text-muted">Total owed</div>
+                    <div class="fs-5">{{ summary.overall_owed.toFixed(2) }}</div>
+                  </div>
+                </div>
+                <div class="col-md-4">
+                  <div class="border rounded p-3">
+                    <div class="text-muted">Net</div>
+                    <div class="fs-5">{{ summary.overall_net.toFixed(2) }}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div v-if="summary.groups.length === 0" class="text-muted">
+                You are not in any groups yet.
+              </div>
+
+              <div v-else class="table-responsive">
+                <table class="table table-sm align-middle mb-0">
+                  <thead>
+                    <tr>
+                      <th>Group</th>
+                      <th class="text-end">Paid</th>
+                      <th class="text-end">Owed</th>
+                      <th class="text-end">Net</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="g in summary.groups" :key="g.group_id">
+                      <td>
+                        <router-link :to="`/groups/${g.group_id}`">{{ g.group_name }}</router-link>
+                        <span class="text-muted ms-2">{{ g.currency }}</span>
+                      </td>
+                      <td class="text-end">{{ g.paid.toFixed(2) }}</td>
+                      <td class="text-end">{{ g.owed.toFixed(2) }}</td>
+                      <td class="text-end">{{ g.net.toFixed(2) }}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div v-else class="text-muted">
+              No summary available.
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
   </div>
@@ -92,8 +156,10 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue"
 import { useAuth } from "../composables/useAuth"
+import { useProfile } from "../composables/useProfile"
 
 const { currentUser, fetchCurrentUser } = useAuth()
+const { summary, loadingSummary, summaryError, fetchSpendingSummary } = useProfile()
 
 const form = reactive({
   email: "",
@@ -192,9 +258,10 @@ async function saveSettings() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   if (!currentUser.value) {
-    fetchCurrentUser()
+    await fetchCurrentUser()
   }
+  fetchSpendingSummary()
 })
 </script>
