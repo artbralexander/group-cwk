@@ -5,7 +5,7 @@
   },
   "scripts": {
     "setup": "bash scripts/setup.sh",
-    "dev:win": "concurrently -n frontend,backend \"npm --prefix frontend run dev\" \".\\\\backend\\\\.venv\\\\Scripts\\\\python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000\"",
-    "dev:linux": "concurrently -n frontend,backend \"npm --prefix frontend run dev\" \"./backend/.venv/bin/python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000\""
+    "dev:win": "concurrently -n frontend,backend,rephraser \"npm --prefix frontend run dev\" \".\\\\backend\\\\.venv\\\\Scripts\\\\python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000\" \".\\\\rephraser\\\\.venv\\\\Scripts\\\\python -m uvicorn rephraser.app:app --reload --host 127.0.0.1 --port 8001\"",
+    "dev:linux": "concurrently -n frontend,backend,rephraser \"npm --prefix frontend run dev\" \"./backend/.venv/bin/python -m uvicorn backend.main:app --reload --host 127.0.0.1 --port 8000\" \"./rephraser/.venv/bin/python -m uvicorn rephraser.app:app --reload --host 127.0.0.1 --port 8001\""
   }
 }

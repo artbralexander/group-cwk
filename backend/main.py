@@ -2,6 +2,8 @@ import os
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Iterable
 import bcrypt
+import json, re, urllib.request
+from urllib.error import URLError, HTTPError
 from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
 from fastapi import FastAPI, Depends, HTTPException, Response, Request, status, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
@@ -212,6 +214,11 @@ class ProfileSpendingSummaryResponse(BaseModel):
     groups: List[GroupSpendingSummary]
 
 
+class ProfileSpendingSummaryTextResponse(BaseModel):
+    summary: str
+    mode: str
+
+
 SETTLEMENT_APPLIED_STATUSES = {"payer_confirmed", "complete"}
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-key")
 SESSION_SALT = "session-cookie"
@@ -226,6 +233,112 @@ def dollars_to_cents(value) -> int:
 def cents_to_dollars(value: int) -> float:
     return float(Decimal(value) / Decimal(100))
 
+
+REPHRASER_URL = os.getenv("REPHRASER_URL", "http://127.0.0.1:8001")
+REPHRASER_TIMEOUT_SECS = float(os.getenv("REPHRASER_TIMEOUT_SECS", "1.0"))
+
+
+def build_rephraser_facts(profile_summary: ProfileSpendingSummaryResponse) -> dict:
+    return {
+        "overall_paid": float(profile_summary.overall_paid),
+        "overall_owed": float(profile_summary.overall_owed),
+        "overall_net": float(profile_summary.overall_net),
+        "groups": [
+            {
+                "group_id": int(g.group_id),
+                "group_name": str(g.group_name),
+                "currency": str(g.currency),
+                "paid": float(g.paid),
+                "owed": float(g.owed),
+                "net": float(g.net),
+            }
+            for g in profile_summary.groups
+        ],
+    }
+
+
+def deterministic_fallback_summary(profile_summary: ProfileSpendingSummaryResponse) -> str:
+    if not profile_summary.groups:
+        return (
+            f"You have no group activity yet (paid {profile_summary.overall_paid:.2f}, "
+            f"owed {profile_summary.overall_owed:.2f})."
+        )
+
+    top = sorted(profile_summary.groups, key=lambda g: abs(g.net), reverse=True)[0]
+    direction = "ahead" if top.net >= 0 else "behind"
+
+    s1 = (
+        f"Across your groups you paid {profile_summary.overall_paid:.2f} and owed "
+        f"{profile_summary.overall_owed:.2f} (net {profile_summary.overall_net:.2f})."
+    )
+    s2 = (
+        f"In “{top.group_name}”, you paid {top.paid:.2f} and owed {top.owed:.2f} "
+        f"({direction} by {abs(top.net):.2f} {top.currency})."
+    )
+    return f"{s1} {s2}"
+
+
+_money_re = re.compile(r"(?<!\d)(\d+\.\d{2})(?!\d)")
+
+
+def validate_rephraser_output(text: str, facts: dict) -> bool:
+    """
+    Strict-ish validation:
+    - Any decimal money amounts (x.xx) mentioned must match one of the fact values (2dp).
+    - Any quoted group name must match a known group name.
+    - Keep this conservative: fail closed and fallback.
+    """
+    if not text or len(text) > 280:
+        return False
+
+    allowed_numbers = set()
+    for key in ("overall_paid", "overall_owed", "overall_net"):
+        allowed_numbers.add(f"{float(facts.get(key, 0.0)):.2f}")
+    for g in facts.get("groups", []):
+        for k in ("paid", "owed", "net"):
+            allowed_numbers.add(f"{float(g.get(k, 0.0)):.2f}")
+        allowed_numbers.add(f"{abs(float(g.get('net', 0.0))):.2f}")
+
+    mentioned_numbers = set(m.group(1) for m in _money_re.finditer(text))
+    if not mentioned_numbers.issubset(allowed_numbers):
+        return False
+
+    known_groups = set(g.get("group_name", "") for g in facts.get("groups", []))
+    quoted = re.findall(r"[“\"]([^”\"]+)[”\"]", text)
+    for q in quoted:
+        if q not in known_groups:
+            return False
+    return True
+
+
+def call_rephraser(facts: dict, max_sentences: int = 2) -> tuple[str, str] | None:
+    """
+    Calls the rephraser service. Returns (summary, mode) or None on failure.
+    """
+    payload = {"facts": facts, "max_sentences": max_sentences}
+    data = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(
+        url=f"{REPHRASER_URL.rstrip('/')}/rephrase",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=REPHRASER_TIMEOUT_SECS) as resp:
+            body = resp.read().decode("utf-8")
+            obj = json.loads(body)
+            summary = (obj.get("summary") or "").strip()
+            mode = (obj.get("mode") or "template").strip()
+            if not summary:
+                return None
+            if not validate_rephraser_output(summary, facts):
+                return None
+            return summary, mode
+    except (HTTPError, URLError, TimeoutError, ValueError):
+        return None
+    
 
 class ConnectionManager:
     def __init__(self):
@@ -660,6 +773,27 @@ def profile_spending_summary(
         overall_net=overall_paid - overall_owed,
         groups=groups_payload,
     )
+
+
+@app.get("/api/profile/spending-summary-text", response_model=ProfileSpendingSummaryTextResponse)
+def profile_spending_summary_text(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    
+    summary_obj = profile_spending_summary(current_user=current_user, db=db)
+
+    facts = build_rephraser_facts(summary_obj)
+
+    # Try rephraser first (optional)
+    rephrased = call_rephraser(facts, max_sentences=2)
+    if rephrased:
+        summary_text, mode = rephrased
+        return ProfileSpendingSummaryTextResponse(summary=summary_text, mode="rephraser")
+
+    # Fallback always works
+    fallback = deterministic_fallback_summary(summary_obj)
+    return ProfileSpendingSummaryTextResponse(summary=fallback, mode="fallback")
 
 
 @app.get("/api/groups", response_model=List[GroupResponse])

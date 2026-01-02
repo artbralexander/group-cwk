@@ -22,4 +22,11 @@ if (-not (Test-Path "backend\.venv")) {
 npm install
 npm --prefix frontend install
 
+if (-not (Test-Path "rephraser\.venv")) {
+  python -m venv rephraser\.venv
+}
+
+.\rephraser\.venv\Scripts\python -m pip install --upgrade pip
+.\rephraser\.venv\Scripts\python -m pip install -r rephraser\requirements.txt
+
 Write-Output "Setup complete. Run: npm run dev"

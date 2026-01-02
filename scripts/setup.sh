@@ -24,4 +24,11 @@ backend/.venv/bin/python -m pip install -r backend/requirements.txt
 npm install
 npm --prefix frontend install
 
+if [ ! -d "rephraser/.venv" ]; then
+  python3 -m venv rephraser/.venv
+fi
+
+rephraser/.venv/bin/python -m pip install --upgrade pip
+rephraser/.venv/bin/python -m pip install -r rephraser/requirements.txt
+
 echo "Setup complete. Run: npm run dev"
