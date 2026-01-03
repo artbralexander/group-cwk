@@ -649,6 +649,40 @@ def create_group_category(
     db.refresh(category)
     return serialize_category(category=category)
 
+
+@app.put("/api/groups/{group_id}/categories/{category_id}",response_model=CategoryResponse)
+def update_group_category(
+    group_id: int,
+    category_id: int,
+    payload: CategoryCreateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    category = (db.query(GroupCategory).options(selectinload(GroupCategory.splits)).filter(GroupCategory.id == category_id,GroupCategory.group_id == group_id).first())
+    if not category:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
+    
+    group = get_group_with_members(db,group_id)
+    if group.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only owner can edit categories")
+    
+    category.name = payload.name.strip()
+    category.description = payload.description or ""
+    category.budget = payload.budget or 0
+
+    db.query(CategorySplit).filter(CategorySplit.category_id == category_id).delete()
+
+    member_map = {member.user.username: member.user_id for member in group.members}
+
+    for split in payload.splits:
+        user_id = member_map.get(split.username)
+        if not user_id:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{split.username not in group}")
+        db.add(CategorySplit(category_id=category_id,user_id=user_id,share=split.share))
+    db.commit()
+    db.refresh(category)
+    return serialize_category(category)
+
     
 
 @app.put("/api/groups/{group_id}", response_model=GroupResponse)

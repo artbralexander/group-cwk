@@ -27,6 +27,22 @@ export function useCategories(groupIdRef){
         }
     }
 
+    async function updateCategory(categoryID, payload){
+        const response = await fetch(`/api/groups/${groupIdRef.value}/categories/${categoryID}`,
+            {
+                method:"PUT",
+                headers: {"Content-Type":"application/json"},
+                credentials: "include",
+                body: JSON.stringify(payload)
+            }
+        )
+        if (!response.ok){
+            const body = await response.json()
+            throw new Error(body.detail || "Failed to update category")
+        }
+        return await response.json()
+    }
+
     async function createCategory(payload){
         if (!groupIdRef.value){
             return
@@ -51,6 +67,7 @@ export function useCategories(groupIdRef){
         loadingCategories,
         categoriesError,
         fetchCategories,
-        createCategory
+        createCategory,
+        updateCategory
     }
 }

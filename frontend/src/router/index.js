@@ -8,6 +8,7 @@ import Groups from "../views/Groups.vue"
 import GroupDetails from "../views/GroupDetails.vue"
 import Settings from "../views/Settings.vue"
 import GroupStats from "../views/GroupStats.vue"
+import CategoryStats from "../views/CategoryStats.vue"
 import { useAuth } from "../composables/useAuth"
 
 const routes = [
@@ -54,6 +55,13 @@ const routes = [
     name: "Settings",
     component: Settings,
     meta: { requiresAuth: true }
+  },
+  {
+    path: "/groups/:id/categories/:categoryId",
+    name: "CategoryStats",
+    component: CategoryStats,
+    meta: { requiresAuth: true },
+    props: true
   }
 ]
 

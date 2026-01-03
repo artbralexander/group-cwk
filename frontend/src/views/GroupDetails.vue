@@ -176,6 +176,47 @@
       <div class="card mt-4">
         <div class="card-body">
           <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <h5 class="card-title mb-0">Categories</h5>
+          </div>
+          <div v-if="categoriesError" class="alert alert-danger">{{ categoryError }}</div>
+          <div v-else-if="loadingCategories" class="text-center py-3">
+            <div class="spinner-border text-primary" role="status">
+              <span class="visually-hidden">Loading...</span>
+            </div>
+          </div>
+          <div v-else-if="categories.length === 0" class="alert alert-secondary mb-0">
+            No categories recorded yet.
+          </div>
+          <div v-else class="list-group">
+            <div v-for="category in categories" :key="category.id" class="list-group-item">
+              <div class="d-flex justify-content-between align-items-start">
+                <div class="d-flex align-items-center">
+                  <div class="fw-semibold">{{ category.name }}</div>
+                </div>
+                <div class="d-flex flex-column align-items-end gap-1">
+                  <RouterLink
+                    v-if="route.params.id"
+                    class="btn btn-outline-secondary btn-sm"
+                    :to="{ name: 'CategoryStats', params: { id: route.params.id, categoryId: category.id } }"
+                  >View insights</RouterLink>
+                  <div class="btn-group btn-group-sm">
+                    <button v-if="isOwner" class="btn btn-outline-secondary" type="button" @click="handleEditCategory(category)">
+                      Edit
+                    </button>
+                    <button class="btn btn-outline-danger" type="button" @click="handleDeleteExpense(expense)">
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card mt-4">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
             <h5 class="card-title mb-0">Expenses</h5>
             <div class="d-flex gap-2">
               <button
@@ -479,7 +520,7 @@
         <div class="modal-dialog modal-lg modal-dialog-centered">
           <div class="modal-content">
             <div class="modal-header">
-              <h5 class="modal-title">Add Category</h5>
+              <h5 class="modal-title">{{ isEditingCategory ? "Edit Category" : "Add Category" }}</h5>
               <button type="button" class="btn-close" @click="closeCategoryModal"></button>
             </div>
             <div class="modal-body">
@@ -524,7 +565,7 @@
                   </div>
                   <button class="btn btn-success w-100" :disabled="creatingCategory">
                     <span v-if="creatingCategory" class="spinner-border spinner-border-sm me-2"></span>
-                    Create Category
+                    {{ isEditingCategory ? "Save Changes" : "Create Category"}}
                   </button>
                 </div>
               </form>
@@ -552,7 +593,8 @@ const{
   loadingCategories,
   categoriesError,
   fetchCategories,
-  createCategory
+  createCategory,
+  updateCategory
 } = useCategories(groupId)
 const {
   activeGroup: group,
@@ -607,6 +649,8 @@ const customSplits = reactive([])
 const expenseError = ref("")
 const showExpenseModal = ref(false)
 const editingExpenseId = ref(null)
+const editingCategoryID = ref(null)
+const isEditingCategory = computed(() => editingCategoryID.value !== null)
 const equalSelectedMembers = ref([])
 const settlementActionError = ref("")
 const recordingSettlementKey = ref("")
@@ -654,8 +698,35 @@ function resetGroupSettingsForm() {
     groupSettingsForm.currency = "GBP"
   }
 }
-function openCategoryModal(){
+async function openCategoryModal(category = null){
   categoryError.value = ""
+  if (category){
+    editingCategoryID.value = category.id
+    categoryForm.name = category.name
+    categoryForm.description = category.description || ""
+    categoryForm.budget = category.budget || 0
+    categoryForm.splits = group.value.members.map(member => {
+      const existing = category.splits?.find(
+        split => split.username === member.username
+      )
+      return {
+        username: member.username,
+        share: existing?.share ?? 1
+      }
+    })
+  }
+  else{
+    editingCategoryID.value = null
+    categoryForm.name=""
+    categoryForm.description=""
+    categoryForm.budget=0
+
+    categoryForm.splits = group.value.members.map(member => ({
+      username:member.username,
+      share:1
+    }))
+  }
+  
   showCategoryModal.value = true
 }
 
@@ -675,24 +746,31 @@ async function saveCategory(){
     categoryError.value ="Category name is required"
     return
   }
+  const payload = {
+    name: categoryForm.name.trim(),
+    description: categoryForm.description || null,
+    budget: categoryForm.budget ? Math.round(Number(categoryForm.budget)*100):null,
+    splits: categoryForm.splits.map(split => ({
+      username: split.username,
+      share : split.share
+    }))
+  }
 
   creatingCategory.value = true
   try{
-    await createCategory({
-      name:categoryForm.name,
-      description: categoryForm.description,
-      budget: Math.round(Number(categoryForm.budget ||0)*100),
-      splits: categoryForm.splits.map((split)=> ({
-        username:split.username,
-        share: split.share
-      }))
-    })
+    if (isEditingCategory.value){
+      await updateCategory(editingCategoryID.value,payload)
+    }
+    else{
+      await createCategory(payload)
+    }
     closeCategoryModal()
     await fetchCategories()
   }
   catch (err){
     categoryError.value = err.message || "Failed to create category"
   } finally{
+    editingCategoryID.value = null
     creatingCategory.value = false
   }
 }
@@ -1078,6 +1156,10 @@ async function openExpenseModal(expense = null) {
 
 function handleEditExpense(expense) {
   openExpenseModal(expense)
+}
+
+function handleEditCategory(category){
+  openCategoryModal(category)
 }
 
 async function handleDeleteExpense(expense) {
