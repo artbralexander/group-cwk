@@ -2,12 +2,15 @@ import os
 from decimal import Decimal, ROUND_HALF_UP
 from typing import List, Iterable
 import bcrypt
+import json, re, urllib.request
+from urllib.error import URLError, HTTPError
 from itsdangerous import URLSafeTimedSerializer, BadSignature, BadTimeSignature
 from fastapi import FastAPI, Depends, HTTPException, Response, Request, status, WebSocket, WebSocketDisconnect, BackgroundTasks
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session, selectinload
+from sqlalchemy import func
 from backend.db import get_db, SessionLocal, Base, engine
 from backend.crud.users import get_user_by_username, create_user, get_user_by_email, update_user
 from backend.crud.groups import (
@@ -35,7 +38,7 @@ from backend.crud.settlements import (
     get_settlement,
     confirm_settlement,
 )
-from backend.models.group import Group, GroupInvite, GroupMember, Expense, Settlement, GroupCategory, CategorySplit
+from backend.models.group import Group, GroupInvite, GroupMember, Expense, Settlement, GroupCategory, CategorySplit, ExpenseSplit
 app = FastAPI()
 
 FRONTEND_DIST = os.getenv(
@@ -56,9 +59,7 @@ def ensure_database():
 @app.on_event("startup")
 def startup_event():
     ensure_database()
-
-
-#Models
+    
 
 class LoginRequest(BaseModel):
     username: str
@@ -193,6 +194,37 @@ class SettlementSummaryResponse(BaseModel):
 class SettlementRecordRequest(BaseModel):
     receiver: str
     amount: float
+    
+    
+class GroupSpendingSummary(BaseModel):
+    group_id: int
+    group_name: str
+    currency: str
+
+    paid: float
+    owed: float
+    net: float
+
+    paid_display: str
+    owed_display: str
+    net_display: str
+
+
+class ProfileSpendingSummaryResponse(BaseModel):
+    overall_paid: float
+    overall_owed: float
+    overall_net: float
+    overall_paid_display: str
+    overall_owed_display: str
+    overall_net_display: str
+    overall_currency: str | None = None
+    currencies: List[str] = []
+    groups: List[GroupSpendingSummary]
+
+
+class ProfileSpendingSummaryTextResponse(BaseModel):
+    summary: str
+    mode: str
 
 
 SETTLEMENT_APPLIED_STATUSES = {"payer_confirmed", "complete"}
@@ -209,6 +241,141 @@ def dollars_to_cents(value) -> int:
 def cents_to_dollars(value: int) -> float:
     return float(Decimal(value) / Decimal(100))
 
+
+CURRENCY_SYMBOLS = {
+    "GBP": "£",
+    "USD": "$",
+    "EUR": "€",
+    "JPY": "¥",
+    "AUD": "A$",
+    "CAD": "C$",
+}
+
+def format_money(currency: str, amount: float) -> str:
+    """
+    Formats an amount with a currency symbol for the supported 6 currencies.
+    Falls back to 'CUR 12.34' if unknown.
+    """
+    code = (currency or "").upper()
+    symbol = CURRENCY_SYMBOLS.get(code)
+    if symbol:
+        return f"{symbol}{amount:.2f}"
+    return f"{code} {amount:.2f}"
+
+
+REPHRASER_URL = os.getenv("REPHRASER_URL", "http://127.0.0.1:8001")
+REPHRASER_TIMEOUT_SECS = float(os.getenv("REPHRASER_TIMEOUT_SECS", "1.0"))
+
+
+def build_rephraser_facts(profile_summary: ProfileSpendingSummaryResponse) -> dict:
+    return {
+        "group_count": len(profile_summary.groups),
+        "groups": [
+            {
+                "group_name": g.group_name,
+                "paid": g.paid_display,
+                "owed": g.owed_display,
+                "net": g.net_display,
+            }
+            for g in profile_summary.groups
+        ],
+    }
+
+
+def deterministic_fallback_summary(profile_summary: ProfileSpendingSummaryResponse) -> str:
+    groups = profile_summary.groups or []
+    if not groups:
+        paid = getattr(profile_summary, "overall_paid_display", f"{profile_summary.overall_paid:.2f}")
+        owed = getattr(profile_summary, "overall_owed_display", f"{profile_summary.overall_owed:.2f}")
+        return f"You have no group activity yet (paid {paid}, owed {owed})."
+
+    totals_by_cur: dict[str, dict[str, float]] = {}
+    for g in groups:
+        cur = (g.currency or "").upper() or "UNK"
+        bucket = totals_by_cur.setdefault(cur, {"paid": 0.0, "owed": 0.0, "net": 0.0})
+        bucket["paid"] += float(g.paid)
+        bucket["owed"] += float(g.owed)
+        bucket["net"] += float(g.net)
+
+    clauses = []
+    for cur in sorted(totals_by_cur.keys()):
+        t = totals_by_cur[cur]
+        clauses.append(
+            f"you paid {format_money(cur, t['paid'])} and owed {format_money(cur, t['owed'])} "
+            f"(net {format_money(cur, t['net'])})"
+        )
+    s1 = "Across your groups " + " and ".join(clauses) + "."
+
+    top = sorted(groups, key=lambda g: abs(float(g.net)), reverse=True)[0]
+    direction = "ahead" if float(top.net) >= 0 else "behind"
+    delta = format_money(top.currency, abs(float(top.net)))
+
+    s2 = (
+        f"In “{top.group_name}”, you paid {top.paid_display} and owed {top.owed_display} "
+        f"({direction} by {delta})."
+    )
+
+    return f"{s1} {s2}"
+
+
+def validate_rephraser_output(text: str, facts: dict) -> bool:
+    """
+    Strict-ish validation:
+    - Any decimal money amounts (x.xx) mentioned must match one of the fact values (2dp).
+    - Any quoted group name must match a known group name.
+    - Keep this conservative: fail closed and fallback.
+    """
+    if not text or len(text) > 280:
+        return False
+
+    allowed_numbers = set()
+    for key in ("overall_paid", "overall_owed", "overall_net"):
+        allowed_numbers.add(f"{float(facts.get(key, 0.0)):.2f}")
+    for g in facts.get("groups", []):
+        for k in ("paid", "owed", "net"):
+            allowed_numbers.add(f"{float(g.get(k, 0.0)):.2f}")
+        allowed_numbers.add(f"{abs(float(g.get('net', 0.0))):.2f}")
+
+    mentioned_numbers = set(m.group(1) for m in _money_re.finditer(text))
+    if not mentioned_numbers.issubset(allowed_numbers):
+        return False
+
+    known_groups = set(g.get("group_name", "") for g in facts.get("groups", []))
+    quoted = re.findall(r"[“\"]([^”\"]+)[”\"]", text)
+    for q in quoted:
+        if q not in known_groups:
+            return False
+    return True
+
+
+def call_rephraser(facts: dict, max_sentences: int = 2) -> tuple[str, str] | None:
+    """
+    Calls the rephraser service. Returns (summary, mode) or None on failure.
+    """
+    payload = {"facts": facts, "max_sentences": max_sentences}
+    data = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(
+        url=f"{REPHRASER_URL.rstrip('/')}/rephrase",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=REPHRASER_TIMEOUT_SECS) as resp:
+            body = resp.read().decode("utf-8")
+            obj = json.loads(body)
+            summary = (obj.get("summary") or "").strip()
+            mode = (obj.get("mode") or "template").strip()
+            if not summary:
+                return None
+            if not validate_rephraser_output(summary, facts):
+                return None
+            return summary, mode
+    except (HTTPError, URLError, TimeoutError, ValueError):
+        return None
+    
 
 class ConnectionManager:
     def __init__(self):
@@ -562,6 +729,135 @@ def update_profile(
     )
 
     return UserResponse(id=updated_user.id, username=updated_user.username, email=updated_user.email)
+
+
+@app.get("/api/profile/spending-summary", response_model=ProfileSpendingSummaryResponse)
+def profile_spending_summary(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user_id = current_user.id
+
+    member_groups = (
+        db.query(Group.id, Group.name, Group.currency)
+        .join(GroupMember, GroupMember.group_id == Group.id)
+        .filter(GroupMember.user_id == user_id)
+        .all()
+    )
+
+    if not member_groups:
+        return ProfileSpendingSummaryResponse(
+            overall_paid=0.0,
+            overall_owed=0.0,
+            overall_net=0.0,
+            overall_paid_display="0.00",
+            overall_owed_display="0.00",
+            overall_net_display="0.00",
+            overall_currency=None,
+            currencies=[],
+            groups=[],
+        )
+
+    group_ids = [g.id for g in member_groups]
+
+    paid_rows = (
+        db.query(Expense.group_id, func.coalesce(func.sum(Expense.amount), 0).label("paid_cents"))
+        .filter(Expense.group_id.in_(group_ids))
+        .filter(Expense.paid_by_id == user_id)
+        .group_by(Expense.group_id)
+        .all()
+    )
+    paid_map = {row.group_id: int(row.paid_cents or 0) for row in paid_rows}
+
+    owed_rows = (
+        db.query(Expense.group_id, func.coalesce(func.sum(ExpenseSplit.amount), 0).label("owed_cents"))
+        .join(Expense, Expense.id == ExpenseSplit.expense_id)
+        .filter(Expense.group_id.in_(group_ids))
+        .filter(ExpenseSplit.user_id == user_id)
+        .group_by(Expense.group_id)
+        .all()
+    )
+    owed_map = {row.group_id: int(row.owed_cents or 0) for row in owed_rows}
+
+    groups_payload: List[GroupSpendingSummary] = []
+    total_paid_cents = 0
+    total_owed_cents = 0
+
+    for g in member_groups:
+        paid_cents = paid_map.get(g.id, 0)
+        owed_cents = owed_map.get(g.id, 0)
+        total_paid_cents += paid_cents
+        total_owed_cents += owed_cents
+
+        paid = cents_to_dollars(paid_cents)
+        owed = cents_to_dollars(owed_cents)
+        net = paid - owed
+        groups_payload.append(
+            GroupSpendingSummary(
+                group_id=g.id,
+                group_name=g.name,
+                currency=g.currency,
+                paid=paid,
+                owed=owed,
+                net=net,
+                paid_display=format_money(g.currency, paid),
+                owed_display=format_money(g.currency, owed),
+                net_display=format_money(g.currency, net),
+            )
+        )
+
+    overall_paid = cents_to_dollars(total_paid_cents)
+    overall_owed = cents_to_dollars(total_owed_cents)
+    overall_net = overall_paid - overall_owed
+
+    groups_payload.sort(key=lambda x: abs(x.net), reverse=True)
+
+    currency_set = sorted({g.currency for g in member_groups if g.currency})
+    currency_count = len(currency_set)
+
+    if currency_count == 1:
+        overall_currency = currency_set[0]
+        overall_paid_display = f"{overall_paid:.2f} {overall_currency}"
+        overall_owed_display = f"{overall_owed:.2f} {overall_currency}"
+        overall_net_display = f"{overall_net:.2f} {overall_currency}"
+    else:
+        overall_currency = None
+        overall_paid_display = f"MIXED CURRENCY({currency_count})"
+        overall_owed_display = f"MIXED CURRENCY({currency_count})"
+        overall_net_display = f"MIXED CURRENCY({currency_count})"
+
+    return ProfileSpendingSummaryResponse(
+        overall_paid=overall_paid,
+        overall_owed=overall_owed,
+        overall_net=overall_net,
+        overall_paid_display=overall_paid_display,
+        overall_owed_display=overall_owed_display,
+        overall_net_display=overall_net_display,
+        overall_currency=overall_currency,
+        currencies=currency_set,
+        groups=groups_payload,
+    )
+
+
+@app.get("/api/profile/spending-summary-text", response_model=ProfileSpendingSummaryTextResponse)
+def profile_spending_summary_text(
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    
+    summary_obj = profile_spending_summary(current_user=current_user, db=db)
+
+    facts = build_rephraser_facts(summary_obj)
+
+    # Try rephraser first (optional)
+    rephrased = call_rephraser(facts, max_sentences=2)
+    if rephrased:
+        summary_text, mode = rephrased
+        return ProfileSpendingSummaryTextResponse(summary=summary_text, mode="rephraser")
+
+    # Fallback always works
+    fallback = deterministic_fallback_summary(summary_obj)
+    return ProfileSpendingSummaryTextResponse(summary=fallback, mode="fallback")
 
 
 @app.get("/api/groups", response_model=List[GroupResponse])
