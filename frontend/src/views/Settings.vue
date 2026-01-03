@@ -96,19 +96,19 @@
                 <div class="col-md-4">
                   <div class="border rounded p-3">
                     <div class="text-muted">Total paid</div>
-                    <div class="fs-5">{{ summary.overall_paid.toFixed(2) }}</div>
+                    <div class="fs-5">{{ summary.overall_paid_display }}</div>
                   </div>
                 </div>
                 <div class="col-md-4">
                   <div class="border rounded p-3">
                     <div class="text-muted">Total owed</div>
-                    <div class="fs-5">{{ summary.overall_owed.toFixed(2) }}</div>
+                    <div class="fs-5">{{ summary.overall_owed_display }}</div>
                   </div>
                 </div>
                 <div class="col-md-4">
                   <div class="border rounded p-3">
                     <div class="text-muted">Net</div>
-                    <div class="fs-5">{{ summary.overall_net.toFixed(2) }}</div>
+                    <div class="fs-5">{{ summary.overall_net_display }}</div>
                   </div>
                 </div>
               </div>
@@ -133,9 +133,9 @@
                         <router-link :to="`/groups/${g.group_id}`">{{ g.group_name }}</router-link>
                         <span class="text-muted ms-2">{{ g.currency }}</span>
                       </td>
-                      <td class="text-end">{{ g.paid.toFixed(2) }}</td>
-                      <td class="text-end">{{ g.owed.toFixed(2) }}</td>
-                      <td class="text-end">{{ g.net.toFixed(2) }}</td>
+                      <td class="text-end">{{ g.paid_display }}</td>
+                      <td class="text-end">{{ g.owed_display }}</td>
+                      <td class="text-end">{{ g.net_display }}</td>
                     </tr>
                   </tbody>
                 </table>

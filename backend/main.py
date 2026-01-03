@@ -59,9 +59,7 @@ def ensure_database():
 @app.on_event("startup")
 def startup_event():
     ensure_database()
-
-
-#Models
+    
 
 class LoginRequest(BaseModel):
     username: str
@@ -202,15 +200,25 @@ class GroupSpendingSummary(BaseModel):
     group_id: int
     group_name: str
     currency: str
+
     paid: float
     owed: float
     net: float
+
+    paid_display: str
+    owed_display: str
+    net_display: str
 
 
 class ProfileSpendingSummaryResponse(BaseModel):
     overall_paid: float
     overall_owed: float
     overall_net: float
+    overall_paid_display: str
+    overall_owed_display: str
+    overall_net_display: str
+    overall_currency: str | None = None
+    currencies: List[str] = []
     groups: List[GroupSpendingSummary]
 
 
@@ -234,23 +242,40 @@ def cents_to_dollars(value: int) -> float:
     return float(Decimal(value) / Decimal(100))
 
 
+CURRENCY_SYMBOLS = {
+    "GBP": "£",
+    "USD": "$",
+    "EUR": "€",
+    "JPY": "¥",
+    "AUD": "A$",
+    "CAD": "C$",
+}
+
+def format_money(currency: str, amount: float) -> str:
+    """
+    Formats an amount with a currency symbol for the supported 6 currencies.
+    Falls back to 'CUR 12.34' if unknown.
+    """
+    code = (currency or "").upper()
+    symbol = CURRENCY_SYMBOLS.get(code)
+    if symbol:
+        return f"{symbol}{amount:.2f}"
+    return f"{code} {amount:.2f}"
+
+
 REPHRASER_URL = os.getenv("REPHRASER_URL", "http://127.0.0.1:8001")
 REPHRASER_TIMEOUT_SECS = float(os.getenv("REPHRASER_TIMEOUT_SECS", "1.0"))
 
 
 def build_rephraser_facts(profile_summary: ProfileSpendingSummaryResponse) -> dict:
     return {
-        "overall_paid": float(profile_summary.overall_paid),
-        "overall_owed": float(profile_summary.overall_owed),
-        "overall_net": float(profile_summary.overall_net),
+        "group_count": len(profile_summary.groups),
         "groups": [
             {
-                "group_id": int(g.group_id),
-                "group_name": str(g.group_name),
-                "currency": str(g.currency),
-                "paid": float(g.paid),
-                "owed": float(g.owed),
-                "net": float(g.net),
+                "group_name": g.group_name,
+                "paid": g.paid_display,
+                "owed": g.owed_display,
+                "net": g.net_display,
             }
             for g in profile_summary.groups
         ],
@@ -258,27 +283,39 @@ def build_rephraser_facts(profile_summary: ProfileSpendingSummaryResponse) -> di
 
 
 def deterministic_fallback_summary(profile_summary: ProfileSpendingSummaryResponse) -> str:
-    if not profile_summary.groups:
-        return (
-            f"You have no group activity yet (paid {profile_summary.overall_paid:.2f}, "
-            f"owed {profile_summary.overall_owed:.2f})."
+    groups = profile_summary.groups or []
+    if not groups:
+        paid = getattr(profile_summary, "overall_paid_display", f"{profile_summary.overall_paid:.2f}")
+        owed = getattr(profile_summary, "overall_owed_display", f"{profile_summary.overall_owed:.2f}")
+        return f"You have no group activity yet (paid {paid}, owed {owed})."
+
+    totals_by_cur: dict[str, dict[str, float]] = {}
+    for g in groups:
+        cur = (g.currency or "").upper() or "UNK"
+        bucket = totals_by_cur.setdefault(cur, {"paid": 0.0, "owed": 0.0, "net": 0.0})
+        bucket["paid"] += float(g.paid)
+        bucket["owed"] += float(g.owed)
+        bucket["net"] += float(g.net)
+
+    clauses = []
+    for cur in sorted(totals_by_cur.keys()):
+        t = totals_by_cur[cur]
+        clauses.append(
+            f"you paid {format_money(cur, t['paid'])} and owed {format_money(cur, t['owed'])} "
+            f"(net {format_money(cur, t['net'])})"
         )
+    s1 = "Across your groups " + " and ".join(clauses) + "."
 
-    top = sorted(profile_summary.groups, key=lambda g: abs(g.net), reverse=True)[0]
-    direction = "ahead" if top.net >= 0 else "behind"
+    top = sorted(groups, key=lambda g: abs(float(g.net)), reverse=True)[0]
+    direction = "ahead" if float(top.net) >= 0 else "behind"
+    delta = format_money(top.currency, abs(float(top.net)))
 
-    s1 = (
-        f"Across your groups you paid {profile_summary.overall_paid:.2f} and owed "
-        f"{profile_summary.overall_owed:.2f} (net {profile_summary.overall_net:.2f})."
-    )
     s2 = (
-        f"In “{top.group_name}”, you paid {top.paid:.2f} and owed {top.owed:.2f} "
-        f"({direction} by {abs(top.net):.2f} {top.currency})."
+        f"In “{top.group_name}”, you paid {top.paid_display} and owed {top.owed_display} "
+        f"({direction} by {delta})."
     )
+
     return f"{s1} {s2}"
-
-
-_money_re = re.compile(r"(?<!\d)(\d+\.\d{2})(?!\d)")
 
 
 def validate_rephraser_output(text: str, facts: dict) -> bool:
@@ -701,7 +738,6 @@ def profile_spending_summary(
 ):
     user_id = current_user.id
 
-    # Groups the user curently belongs to
     member_groups = (
         db.query(Group.id, Group.name, Group.currency)
         .join(GroupMember, GroupMember.group_id == Group.id)
@@ -714,6 +750,11 @@ def profile_spending_summary(
             overall_paid=0.0,
             overall_owed=0.0,
             overall_net=0.0,
+            overall_paid_display="0.00",
+            overall_owed_display="0.00",
+            overall_net_display="0.00",
+            overall_currency=None,
+            currencies=[],
             groups=[],
         )
 
@@ -750,6 +791,7 @@ def profile_spending_summary(
 
         paid = cents_to_dollars(paid_cents)
         owed = cents_to_dollars(owed_cents)
+        net = paid - owed
         groups_payload.append(
             GroupSpendingSummary(
                 group_id=g.id,
@@ -757,20 +799,42 @@ def profile_spending_summary(
                 currency=g.currency,
                 paid=paid,
                 owed=owed,
-                net=paid - owed,
+                net=net,
+                paid_display=format_money(g.currency, paid),
+                owed_display=format_money(g.currency, owed),
+                net_display=format_money(g.currency, net),
             )
         )
 
     overall_paid = cents_to_dollars(total_paid_cents)
     overall_owed = cents_to_dollars(total_owed_cents)
+    overall_net = overall_paid - overall_owed
 
-    #Sorts by absolute net descending
     groups_payload.sort(key=lambda x: abs(x.net), reverse=True)
+
+    currency_set = sorted({g.currency for g in member_groups if g.currency})
+    currency_count = len(currency_set)
+
+    if currency_count == 1:
+        overall_currency = currency_set[0]
+        overall_paid_display = f"{overall_paid:.2f} {overall_currency}"
+        overall_owed_display = f"{overall_owed:.2f} {overall_currency}"
+        overall_net_display = f"{overall_net:.2f} {overall_currency}"
+    else:
+        overall_currency = None
+        overall_paid_display = f"MIXED CURRENCY({currency_count})"
+        overall_owed_display = f"MIXED CURRENCY({currency_count})"
+        overall_net_display = f"MIXED CURRENCY({currency_count})"
 
     return ProfileSpendingSummaryResponse(
         overall_paid=overall_paid,
         overall_owed=overall_owed,
-        overall_net=overall_paid - overall_owed,
+        overall_net=overall_net,
+        overall_paid_display=overall_paid_display,
+        overall_owed_display=overall_owed_display,
+        overall_net_display=overall_net_display,
+        overall_currency=overall_currency,
+        currencies=currency_set,
         groups=groups_payload,
     )
 
