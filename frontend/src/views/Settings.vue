@@ -96,19 +96,19 @@
                 <div class="col-md-4">
                   <div class="border rounded p-3">
                     <div class="text-muted">Total paid</div>
-                    <div class="fs-5">{{ summary.overall_paid.toFixed(2) }}</div>
+                    <div class="fs-5">{{ summary.overall_paid_display }}</div>
                   </div>
                 </div>
                 <div class="col-md-4">
                   <div class="border rounded p-3">
                     <div class="text-muted">Total owed</div>
-                    <div class="fs-5">{{ summary.overall_owed.toFixed(2) }}</div>
+                    <div class="fs-5">{{ summary.overall_owed_display }}</div>
                   </div>
                 </div>
                 <div class="col-md-4">
                   <div class="border rounded p-3">
                     <div class="text-muted">Net</div>
-                    <div class="fs-5">{{ summary.overall_net.toFixed(2) }}</div>
+                    <div class="fs-5">{{ summary.overall_net_display }}</div>
                   </div>
                 </div>
               </div>
@@ -133,13 +133,45 @@
                         <router-link :to="`/groups/${g.group_id}`">{{ g.group_name }}</router-link>
                         <span class="text-muted ms-2">{{ g.currency }}</span>
                       </td>
-                      <td class="text-end">{{ g.paid.toFixed(2) }}</td>
-                      <td class="text-end">{{ g.owed.toFixed(2) }}</td>
-                      <td class="text-end">{{ g.net.toFixed(2) }}</td>
+                      <td class="text-end">{{ g.paid_display }}</td>
+                      <td class="text-end">{{ g.owed_display }}</td>
+                      <td class="text-end">{{ g.net_display }}</td>
                     </tr>
                   </tbody>
                 </table>
               </div>
+              <hr class="my-4" />
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                  <h5 class="mb-0">Spending overview</h5>
+                  <button
+                    class="btn btn-outline-primary btn-sm"
+                    type="button"
+                    :disabled="loadingSummaryText"
+                    @click="fetchSpendingSummaryText"
+                  >
+                    <span
+                      v-if="loadingSummaryText"
+                      class="spinner-border spinner-border-sm me-2"
+                    ></span>
+                    Generate summary
+                  </button>
+                </div>
+
+                <div v-if="summaryTextError" class="alert alert-danger py-2">
+                  {{ summaryTextError }}
+                </div>
+
+                <div
+                  v-else-if="summaryText"
+                  class="border rounded p-3"
+                >
+                  {{ summaryText }}
+                </div>
+
+                <div v-else class="text-muted small">
+                  Click “Generate summary” to get a short overview of your spending habits.
+                </div>
+
             </div>
 
             <div v-else class="text-muted">
@@ -159,7 +191,16 @@ import { useAuth } from "../composables/useAuth"
 import { useProfile } from "../composables/useProfile"
 
 const { currentUser, fetchCurrentUser } = useAuth()
-const { summary, loadingSummary, summaryError, fetchSpendingSummary } = useProfile()
+const {
+  summary,
+  loadingSummary,
+  summaryError,
+  fetchSpendingSummary,
+  summaryText,
+  loadingSummaryText,
+  summaryTextError,
+  fetchSpendingSummaryText
+} = useProfile()
 
 const form = reactive({
   email: "",

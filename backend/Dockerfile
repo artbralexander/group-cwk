@@ -15,21 +15,28 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=8080 \
     DATABASE_URL=sqlite:///./dev.db \
-    FRONTEND_DIST=/app/frontend/dist
+    FRONTEND_DIST=/app/frontend/dist \
+    REPHRASER_URL=http://127.0.0.1:8001
 
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends build-essential \
+    && apt-get install -y --no-install-recommends build-essential supervisor \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt backend/requirements.txt
 RUN pip install --upgrade pip \
     && pip install -r backend/requirements.txt
 
+# Rephraser deps
+COPY rephraser/requirements.txt rephraser/requirements.txt
+RUN pip install -r rephraser/requirements.txt
+
 COPY backend /app/backend
+COPY rephraser /app/rephraser
+COPY backend/supervisord.conf /app/supervisord.conf
 COPY --from=frontend-builder /workspace/frontend/dist /app/frontend/dist
 
 EXPOSE ${PORT}
 
-CMD ["uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["supervisord", "-c", "/app/supervisord.conf"]
