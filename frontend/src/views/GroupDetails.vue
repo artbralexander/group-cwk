@@ -436,6 +436,14 @@
                     >
                       Custom
                     </button>
+                    <button
+                      type="button"
+                      class="btn"
+                      :class="expenseForm.splitMode === 'random' ? 'btn-primary' : 'btn-outline-primary'"
+                      @click="expenseForm.splitMode = 'random'"
+                    >
+                      Random
+                    </button>
                   </div>
                 </div>
 
@@ -500,6 +508,42 @@
                     Splits {{ customTotalMatches ? 'match' : 'must equal' }} total amount
                   </p>
                 </div>
+
+                <div class="col-12" v-if="expenseForm.splitMode === 'random'">
+                  <label class="form-label d-flex justify-content-between align-items-center">
+                    <span>Eligible members</span>
+                    <button
+                      class="btn btn-link btn-sm p-0"
+                      type="button"
+                      @click="selectAllEqualMembers"
+                    >
+                      Select all
+                    </button>
+                  </label>
+
+                  <div class="d-flex flex-wrap gap-3">
+                    <label
+                      v-for="member in group.members"
+                      :key="member.id"
+                      class="form-check m-0"
+                    >
+                      <input
+                        class="form-check-input me-1"
+                        type="checkbox"
+                        :checked="isEqualSelected(member.username)"
+                        @change="toggleEqualMember(member.username)"
+                      />
+                      <span class="form-check-label">
+                        {{ displayMemberName(member.username) }}
+                      </span>
+                    </label>
+                  </div>
+
+                  <p class="small text-muted mt-2 mb-0">
+                    One selected member will be randomly chosen to pay the full amount.
+                  </p>
+                </div>
+
 
                 <div class="col-12">
                   <div v-if="expenseError" class="alert alert-danger py-2">{{ expenseError }}</div>
@@ -1059,15 +1103,18 @@ async function saveExpense() {
   }
 
   let splitsPayload = []
+
   if (expenseForm.splitMode === "equal") {
     const selected =
       equalSelectedMembers.value.length > 0
         ? equalSelectedMembers.value
-        : group.value?.members.map((member) => member.username) || []
+        : group.value?.members.map((m) => m.username) || []
+
     if (!selected.length) {
       expenseError.value = "Select at least one member to split between"
       return
     }
+
     const selectedSet = new Set(selected)
     splitsPayload = customSplits
       .filter((split) => selectedSet.has(split.username))
@@ -1075,14 +1122,35 @@ async function saveExpense() {
         username: split.username,
         amount: Number(split.amount || 0)
       }))
-  } else {
+
+  } else if (expenseForm.splitMode === "custom") {
     if (!customTotalMatches.value) {
       expenseError.value = "Custom splits must equal total amount"
       return
     }
+
     splitsPayload = customSplits.map((split) => ({
       username: split.username,
       amount: Number(split.amount || 0)
+    }))
+
+  } else if (expenseForm.splitMode === "random") {
+    const selected = equalSelectedMembers.value
+
+    if (!selected.length) {
+      expenseError.value = "Select at least one eligible member"
+      return
+    }
+
+    const randomUsername =
+      selected[Math.floor(Math.random() * selected.length)]
+
+    splitsPayload = group.value.members.map((member) => ({
+      username: member.username,
+      amount:
+        member.username === randomUsername
+          ? Number(expenseForm.amount)
+          : 0
     }))
   }
 

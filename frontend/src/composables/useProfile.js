@@ -3,7 +3,6 @@ import { ref } from "vue"
 const summary = ref(null)
 const loadingSummary = ref(false)
 const summaryError = ref("")
-
 const summaryText = ref("")
 const loadingSummaryText = ref(false)
 const summaryTextError = ref("")
