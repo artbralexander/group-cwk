@@ -334,15 +334,20 @@ def deterministic_fallback_summary(profile_summary: ProfileSpendingSummaryRespon
         bucket["paid"] += float(g.paid)
         bucket["owed"] += float(g.owed)
         bucket["net"] += float(g.net)
+        
+    cur_codes = sorted(totals_by_cur.keys())
+    cur_count = len(cur_codes)
+    
+    header = f"Across your groups (MIX CUR ({cur_count})) totals are: " if cur_count > 1 else "Across your groups totals are: "
 
-    clauses = []
-    for cur in sorted(totals_by_cur.keys()):
+    parts = []
+    for cur in cur_codes:
         t = totals_by_cur[cur]
-        clauses.append(
-            f"you paid {format_money(cur, t['paid'])} and owed {format_money(cur, t['owed'])} "
+        parts.append(
+            f"{cur} {format_money(cur, t['paid'])} / {format_money(cur, t['owed'])} "
             f"(net {format_money(cur, t['net'])})"
         )
-    s1 = "Across your groups " + " and ".join(clauses) + "."
+    s1 = header + " and ".join(parts) + "."
 
     top = sorted(groups, key=lambda g: abs(float(g.net)), reverse=True)[0]
     direction = "ahead" if float(top.net) >= 0 else "behind"
@@ -352,6 +357,19 @@ def deterministic_fallback_summary(profile_summary: ProfileSpendingSummaryRespon
         f"In “{top.group_name}”, you paid {top.paid_display} and owed {top.owed_display} "
         f"({direction} by {delta})."
     )
+
+    others = [g for g in groups if g.group_id != top.group_id]
+    others.sort(key=lambda g: abs(float(g.net)), reverse=True)
+    tail_groups = others[:3]
+
+    if tail_groups:
+        group_bits = []
+        for g in tail_groups:
+            dir2 = "ahead" if float(g.net) >= 0 else "behind"
+            delta2 = format_money(g.currency, abs(float(g.net)))
+            group_bits.append(f"“{g.group_name}” ({dir2} by {delta2})")
+        s3 = " Other groups: " + ", ".join(group_bits) + "."
+        return f"{s1} {s2}{s3}"
 
     return f"{s1} {s2}"
 

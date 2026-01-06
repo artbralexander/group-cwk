@@ -186,7 +186,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref, watch } from "vue"
+import { computed, onMounted, onBeforeUnmount, reactive, ref, watch } from "vue"
 import { useAuth } from "../composables/useAuth"
 import { useProfile } from "../composables/useProfile"
 
@@ -300,6 +300,8 @@ async function saveSettings() {
 }
 
 onMounted(async () => {
+  summaryText.value = ""
+  summaryTextError.value = ""
   if (!currentUser.value) {
     await fetchCurrentUser()
   }
