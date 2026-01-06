@@ -142,6 +142,48 @@
           </div>
         </div>
       </div>
+      <div class="card mt-4">
+        <div class="card-body">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <h5 class="card-title mb-0">Subscriptions</h5>
+            <button class="btn btn-success btn-sm" type="button" @click="openSubscriptionModal()">Add subscription</button>
+          </div>
+
+          <div v-if="subscriptionsError" class="alert alert-danger mt-3">{{ subscriptionsError }}</div>
+          <div v-else-if="subscriptionsLoading" class="text-center py-3">
+            <div class="spinner-border text-primary" role="status"><span class="visually-hidden">Loading...</span></div>
+          </div>
+          <div v-else-if="subscriptions.length === 0" class="alert alert-secondary mt-3 mb-0">
+            No subscriptions yet.
+          </div>
+          <div v-else class="list-group mt-3">
+            <div v-for="sub in subscriptions" :key="sub.id" class="list-group-item">
+              <div class="d-flex justify-content-between align-items-start">
+                <div>
+                  <div class="fw-semibold">{{ sub.name }}</div>
+                  <small class="text-muted">
+                    {{ sub.cadence }} • next due {{ sub.next_due_date }} • {{ sub.status }}
+                  </small>
+                  <ul class="small text-muted mb-0 mt-2">
+                    <li v-for="m in sub.members" :key="m.username + sub.id">
+                      {{ m.username }} pays {{ Number(m.amount).toFixed(2) }}
+                    </li>
+                  </ul>
+                </div>
+                <div class="text-end">
+                  <div class="fw-bold">{{ sub.amount_display || Number(sub.amount).toFixed(2) }}</div>
+                  <div class="btn-group btn-group-sm mt-2">
+                    <button class="btn btn-outline-primary" type="button" @click="handlePaySubscription(sub)">Pay now</button>
+                    <button class="btn btn-outline-secondary" type="button" @click="openSubscriptionModal(sub)">Edit</button>
+                    <button class="btn btn-outline-danger" type="button" @click="handleDeleteSubscription(sub)">Delete</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>  
+      
       <div class="row g-4">
         <div class="col-lg-6">
           <div class="card h-100">
@@ -575,6 +617,68 @@
       </div>
     </div>
   </div>
+  <div v-if="showSubscriptionModal">
+    <div class="modal-backdrop fade show"></div>
+    <div class="modal d-block" tabindex="-1">
+      <div class="modal-dialog modal-lg modal-dialog-centered">
+        <div class="modal-content">
+          <div class="modal-header">
+           <h5 class="modal-title">{{ editingSubscriptionId ? "Edit subscription" : "Add subscription" }}</h5>
+           <button type="button" class="btn-close" @click="closeSubscriptionModal"></button>
+          </div>
+          <div class="modal-body">
+           <form class="row g-3" @submit.prevent="saveSubscription">
+            <div class="col-12">
+              <label class="form-label">Name</label>
+              <input v-model.trim="subscriptionForm.name" class="form-control" required />
+            </div>
+            <div class="col-6">
+              <label class="form-label">Amount</label>
+              <input v-model.number="subscriptionForm.amount" type="number" min="0" step="0.01" class="form-control" required />
+            </div>
+            <div class="col-6">
+              <label class="form-label">Cadence</label>
+              <select v-model="subscriptionForm.cadence" class="form-select">
+                <option value="monthly">Monthly</option>
+                <option value="quarterly">Quarterly</option>
+                <option value="yearly">Yearly</option>
+              </select>
+            </div>
+            <div class="col-6">
+              <label class="form-label">Next due date</label>
+              <input v-model="subscriptionForm.next_due_date" type="date" class="form-control" required />
+            </div>
+            <div class="col-12">
+              <label class="form-label">Notes</label>
+              <textarea v-model="subscriptionForm.notes" class="form-control" rows="2"></textarea>
+            </div>
+            <div class="col-12">
+              <label class="form-label">Member shares (ratios)</label>
+              <table class="table table-sm mb-0">
+                <tbody>
+                  <tr v-for="m in subscriptionForm.members" :key="m.username">
+                    <td>{{ displayMemberName(m.username) }}</td>
+                    <td style="width: 140px;">
+                      <input v-model.number="m.share" type="number" min="1" step="1" class="form-control text-end" />
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+              <small class="text-muted">Shares are relative weights (e.g., 2 pays twice as much as 1).</small>
+            </div>
+            <div class="col-12">
+              <div v-if="subscriptionError" class="alert alert-danger py-2">{{ subscriptionError }}</div>
+              <button class="btn btn-success w-100">
+                <span v-if="subscriptionsLoading" class="spinner-border spinner-border-sm me-2"></span>
+                {{ editingSubscriptionId ? "Save changes" : "Create subscription" }}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 </template>
 
 <script setup>
@@ -584,6 +688,8 @@ import { useGroups } from "../composables/useGroups"
 import { useExpenses } from "../composables/useExpenses"
 import { useAuth } from "../composables/useAuth"
 import { useCategories } from "../composables/useCategories"
+import { useSubscriptions } from "../composables/useSubscriptions"
+
 
 const route = useRoute()
 const router = useRouter()
@@ -596,6 +702,15 @@ const{
   createCategory,
   updateCategory
 } = useCategories(groupId)
+const {
+  loading: subscriptionsLoading,
+  error: subscriptionsError,
+  list: listSubscriptions,
+  create: createSubscription,
+  update: updateSubscription,
+  remove: removeSubscription,
+  pay: paySubscription
+} = useSubscriptions()
 const {
   activeGroup: group,
   loadingGroup,
@@ -666,6 +781,19 @@ const groupSettingsForm = reactive({
   name: "",
   currency: "GBP"
 })
+const subscriptions = ref([])
+const showSubscriptionModal = ref(false)
+const subscriptionError = ref("")
+const editingSubscriptionId = ref(null)
+const subscriptionForm = reactive({
+  name: "",
+  amount: 0,
+  cadence: "monthly",
+  next_due_date: "",
+  notes: "",
+  members: []
+})
+
 const currencySymbols = {
   GBP: "£",
   USD: "$",
@@ -858,6 +986,7 @@ function loadGroup() {
     fetchGroup(route.params.id)
     fetchExpenses(route.params.id)
     fetchSettlements(route.params.id)
+    loadSubscriptions()
   }
 }
 
@@ -1228,6 +1357,106 @@ async function handleConfirmSettlement(record) {
     settlementActionError.value = err.message || "Failed to confirm settlement"
   } finally {
     confirmingSettlementId.value = null
+  }
+}
+
+function resetSubscriptionForm() {
+  subscriptionError.value = ""
+  editingSubscriptionId.value = null
+  subscriptionForm.name = ""
+  subscriptionForm.amount = 0
+  subscriptionForm.cadence = "monthly"
+  subscriptionForm.next_due_date = ""
+  subscriptionForm.notes = ""
+  subscriptionForm.members = group.value
+    ? group.value.members.map((m) => ({ username: m.username, share: 1 }))
+    : []
+}
+
+function openSubscriptionModal(sub = null) {
+  subscriptionError.value = ""
+  if (sub) {
+    editingSubscriptionId.value = sub.id
+    subscriptionForm.name = sub.name
+    subscriptionForm.amount = Number(sub.amount)
+    subscriptionForm.cadence = sub.cadence
+    subscriptionForm.next_due_date = sub.next_due_date
+    subscriptionForm.notes = sub.notes || ""
+    // reuse member order from group; fall back to share=1
+    subscriptionForm.members = group.value
+      ? group.value.members.map((m) => {
+          const match = (sub.members || []).find((x) => x.username === m.username)
+          return { username: m.username, share: match ? match.share : 1 }
+        })
+      : []
+  } else {
+    resetSubscriptionForm()
+  }
+  showSubscriptionModal.value = true
+}
+
+function closeSubscriptionModal() {
+  showSubscriptionModal.value = false
+  resetSubscriptionForm()
+}
+
+async function loadSubscriptions() {
+  if (!route.params.id) return
+  try {
+    subscriptions.value = await listSubscriptions(route.params.id)
+  } catch (err) {
+    // subscriptionsError is already set by composable
+    console.error(err)
+  }
+}
+
+async function saveSubscription() {
+  if (!route.params.id) return
+  subscriptionError.value = ""
+  if (!subscriptionForm.name.trim() || !subscriptionForm.amount || subscriptionForm.amount <= 0 || !subscriptionForm.next_due_date) {
+    subscriptionError.value = "Name, positive amount, and due date are required"
+    return
+  }
+  const payload = {
+    name: subscriptionForm.name.trim(),
+    amount: Number(subscriptionForm.amount),
+    cadence: subscriptionForm.cadence,
+    next_due_date: subscriptionForm.next_due_date,
+    notes: subscriptionForm.notes || "",
+    category_id: null,
+    members: subscriptionForm.members.map((m) => ({ username: m.username, share: Number(m.share) || 1 }))
+  }
+  try {
+    if (editingSubscriptionId.value) {
+      await updateSubscription(route.params.id, editingSubscriptionId.value, payload)
+    } else {
+      await createSubscription(route.params.id, payload)
+    }
+    await loadSubscriptions()
+    closeSubscriptionModal()
+  } catch (err) {
+    subscriptionError.value = err.message || "Failed to save subscription"
+  }
+}
+
+async function handleDeleteSubscription(sub) {
+  if (!route.params.id) return
+  if (!window.confirm("Delete this subscription?")) return
+  try {
+    await removeSubscription(route.params.id, sub.id)
+    await loadSubscriptions()
+  } catch (err) {
+    subscriptionError.value = err.message || "Failed to delete subscription"
+  }
+}
+
+async function handlePaySubscription(sub) {
+  if (!route.params.id) return
+  try {
+    await paySubscription(route.params.id, sub.id)
+    await Promise.all([loadSubscriptions(), fetchExpenses(route.params.id), fetchSettlements(route.params.id)])
+  } catch (err) {
+    subscriptionError.value = err.message || "Failed to record payment"
   }
 }
 

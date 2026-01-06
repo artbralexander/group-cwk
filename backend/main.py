@@ -13,6 +13,15 @@ from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
 from backend.db import get_db, SessionLocal, Base, engine
 from backend.crud.users import get_user_by_username, create_user, get_user_by_email, update_user
+from datetime import date, timedelta
+from backend.crud.subscriptions import (
+    list_subscriptions_for_group,
+    get_subscription,
+    create_subscription as persist_subscription,
+    update_subscription as persist_subscription_update,
+    delete_subscription as persist_subscription_delete,
+)
+from backend.models.group import Subscription, SubscriptionMember
 from backend.crud.groups import (
     create_group as persist_group,
     get_groups_for_user,
@@ -52,7 +61,8 @@ if os.path.isdir(os.path.join(FRONTEND_DIST, "assets")):
 
 
 def ensure_database():
-    from backend.models import user, group  # noqa: F401
+    from backend.models import user, group  # noqa: F401 
+    from backend.models.group import Subscription, SubscriptionMember
     Base.metadata.create_all(bind=engine)
 
 
@@ -157,6 +167,7 @@ class ExpenseCreateRequest(BaseModel):
 class ExpenseSplitResponse(BaseModel):
     username: str
     amount: float
+    share: int | None = None
 
 
 class ExpenseResponse(BaseModel):
@@ -225,6 +236,33 @@ class ProfileSpendingSummaryResponse(BaseModel):
 class ProfileSpendingSummaryTextResponse(BaseModel):
     summary: str
     mode: str
+
+
+class SubscriptionMemberInput(BaseModel):
+    username: str
+    share: int
+
+class SubscriptionCreateRequest(BaseModel):
+    name: str
+    amount: float
+    cadence: str  
+    next_due_date: date
+    notes: str | None = None
+    category_id: int | None = None
+    members: List[SubscriptionMemberInput]
+
+class SubscriptionResponse(BaseModel):
+    id: int
+    name: str
+    amount: float
+    amount_display: str
+    cadence: str
+    next_due_date: str
+    due_in_days: int
+    status: str
+    notes: str | None
+    category_id: int | None
+    members: List[ExpenseSplitResponse]  
 
 
 SETTLEMENT_APPLIED_STATUSES = {"payer_confirmed", "complete"}
@@ -622,6 +660,70 @@ def serialize_settlement_record(record: Settlement) -> SettlementRecordResponse:
         receiver_confirmed=record.receiver_confirmed_at is not None,
         created_at=record.created_at.isoformat(),
     )
+
+
+CADENCE_DAY_DELTAS = {"monthly": 30, "quarterly": 90, "yearly": 365}
+
+def serialize_subscription(sub: Subscription) -> SubscriptionResponse:
+    amount = cents_to_dollars(sub.amount)
+    today = date.today()
+    due_in = (sub.next_due_date - today).days
+    status = "ok"
+    if due_in <= 0:
+        status = "due"
+    elif due_in <= 7:
+        status = "due_soon"
+
+    member_payloads = []
+    total_share = sum(m.share for m in sub.members)
+    for m in sub.members:
+        username = m.user.username if m.user else ""
+        share_amount = cents_to_dollars((sub.amount * m.share) // total_share if total_share else 0)
+        member_payloads.append(ExpenseSplitResponse(username=username, amount=share_amount, share=m.share))
+
+    return SubscriptionResponse(
+        id=sub.id,
+        name=sub.name,
+        amount=amount,
+        amount_display=format_money(sub.group.currency if sub.group else None, amount),
+        cadence=sub.cadence,
+        next_due_date=sub.next_due_date.isoformat(),
+        due_in_days=due_in,
+        status=status,
+        notes=sub.notes or "",
+        category_id=sub.category_id,
+        members=member_payloads,
+    )
+
+def _build_member_shares(group, members: List[SubscriptionMemberInput]):
+    member_map = {m.user.username: m.user.id for m in group.members if m.user}
+    shares: list[dict] = []
+    for item in members:
+        uid = member_map.get(item.username)
+        if not uid:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"User {item.username} not in group")
+        if item.share <= 0:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Share must be positive")
+        shares.append({"user_id": uid, "share": item.share})
+    if not shares:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="At least one member is required")
+    return shares
+
+def _subscription_splits_from_shares(sub: Subscription, payer_id: int):
+    total_share = sum(m.share for m in sub.members)
+    splits = []
+    allocated = 0
+    for m in sub.members:
+        portion = (sub.amount * m.share) // total_share
+        splits.append({"user_id": m.user_id, "amount_cents": portion})
+        allocated += portion
+    remainder = sub.amount - allocated
+    if remainder > 0:
+        for s in splits:
+            if s["user_id"] == payer_id:
+                s["amount_cents"] += remainder
+                break
+    return splits
 
 
 @app.get("/api/health")
@@ -1387,6 +1489,146 @@ def confirm_settlement_payment(
     updated = confirm_settlement(db, settlement)
     notify_settlement_update(background_tasks, group_id, [settlement.payer_id, settlement.receiver_id])
     return serialize_settlement_record(updated)
+
+
+@app.get("/api/groups/{group_id}/subscriptions", response_model=List[SubscriptionResponse])
+def list_group_subscriptions(group_id: int, current_user=Depends(get_current_user), db: Session = Depends(get_db)):
+    group = get_group_with_members(db, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    if not any(m.user_id == current_user.id for m in group.members):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+    subs = list_subscriptions_for_group(db, group_id)
+    return [serialize_subscription(s) for s in subs]
+
+@app.post("/api/groups/{group_id}/subscriptions", response_model=SubscriptionResponse, status_code=status.HTTP_201_CREATED)
+def create_group_subscription(
+    group_id: int,
+    payload: SubscriptionCreateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+):
+    group = get_group_with_members(db, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    if not any(m.user_id == current_user.id for m in group.members):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    member_shares = _build_member_shares(group, payload.members)
+    amount_cents = dollars_to_cents(payload.amount)
+    sub = persist_subscription(
+        db,
+        group_id=group_id,
+        name=payload.name.strip(),
+        amount_cents=amount_cents,
+        cadence=payload.cadence.strip().lower(),
+        next_due=payload.next_due_date,
+        notes=payload.notes or "",
+        category_id=payload.category_id,
+        created_by_id=current_user.id,
+        member_shares=member_shares,
+    )
+    notify_group_members(background_tasks, group, {"type": "subscriptions_changed", "data": {"group_id": group_id}}, exclude_user_ids=[current_user.id])
+    return serialize_subscription(sub)
+
+@app.put("/api/groups/{group_id}/subscriptions/{sub_id}", response_model=SubscriptionResponse)
+def update_group_subscription(
+    group_id: int,
+    sub_id: int,
+    payload: SubscriptionCreateRequest,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+):
+    group = get_group_with_members(db, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    if not any(m.user_id == current_user.id for m in group.members):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    sub = get_subscription(db, sub_id)
+    if not sub or sub.group_id != group_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+
+    member_shares = _build_member_shares(group, payload.members)
+    amount_cents = dollars_to_cents(payload.amount)
+    updated = persist_subscription_update(
+        db,
+        sub,
+        name=payload.name.strip(),
+        amount_cents=amount_cents,
+        cadence=payload.cadence.strip().lower(),
+        next_due=payload.next_due_date,
+        notes=payload.notes or "",
+        category_id=payload.category_id,
+        member_shares=member_shares,
+    )
+    notify_group_members(background_tasks, group, {"type": "subscriptions_changed", "data": {"group_id": group_id}}, exclude_user_ids=[current_user.id])
+    return serialize_subscription(updated)
+
+@app.delete("/api/groups/{group_id}/subscriptions/{sub_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_group_subscription(
+    group_id: int,
+    sub_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+):
+    group = get_group_with_members(db, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    if not any(m.user_id == current_user.id for m in group.members):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    sub = get_subscription(db, sub_id)
+    if not sub or sub.group_id != group_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+
+    persist_subscription_delete(db, sub)
+    notify_group_members(background_tasks, group, {"type": "subscriptions_changed", "data": {"group_id": group_id}}, exclude_user_ids=[current_user.id])
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+@app.post("/api/groups/{group_id}/subscriptions/{sub_id}/pay", response_model=ExpenseResponse, status_code=status.HTTP_201_CREATED)
+def pay_subscription(
+    group_id: int,
+    sub_id: int,
+    current_user=Depends(get_current_user),
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
+):
+    group = get_group_with_members(db, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
+    if not any(m.user_id == current_user.id for m in group.members):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
+
+    sub = get_subscription(db, sub_id)
+    if not sub or sub.group_id != group_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
+
+    payer = current_user
+    splits = _subscription_splits_from_shares(sub, payer.id)
+    expense = create_expense(
+        db,
+        group_id=group_id,
+        description=f"{sub.name} subscription",
+        amount_cents=sub.amount,
+        paid_by_id=payer.id,
+        category_id=sub.category_id,
+        splits=splits,
+    )
+
+    delta_days = CADENCE_DAY_DELTAS.get(sub.cadence, 30)
+    sub.next_due_date = (sub.next_due_date or date.today()) + timedelta(days=delta_days)
+    db.add(sub)
+    db.commit()
+    updated_expense = get_expense(db, expense.id) or expense
+
+    notify_group_members(background_tasks, group, {"type": "subscriptions_changed", "data": {"group_id": group_id}}, exclude_user_ids=[current_user.id])
+    notify_group_members(background_tasks, group, {"type": "expenses_changed", "data": {"group_id": group_id}}, exclude_user_ids=[current_user.id])
+    return serialize_expense(updated_expense)
+
 
 @app.post("/api/groups/{group_id}/invite", response_model=InviteResponse, status_code=status.HTTP_201_CREATED)
 def invite_user_to_group(
