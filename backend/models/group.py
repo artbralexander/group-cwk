@@ -1,6 +1,6 @@
-from datetime import datetime
+from datetime import datetime, date
 from typing import List, TYPE_CHECKING
-from sqlalchemy import String, ForeignKey, UniqueConstraint, DateTime, func, Integer
+from sqlalchemy import String, ForeignKey, UniqueConstraint, DateTime, func, Integer, Date
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from backend.db import Base
 
@@ -125,3 +125,39 @@ class Settlement(Base):
     group: Mapped["Group"] = relationship("Group")
     payer: Mapped["User"] = relationship("User", foreign_keys=[payer_id])
     receiver: Mapped["User"] = relationship("User", foreign_keys=[receiver_id])
+
+class Subscription(Base):
+    __tablename__ = "subscriptions"
+    __table_args__ = (UniqueConstraint("group_id", "name", name="uq_subscription_name"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    group_id: Mapped[int] = mapped_column(ForeignKey("groups.id"), index=True)
+    name: Mapped[str] = mapped_column(String(100))
+    amount: Mapped[int] = mapped_column(Integer)  # cents
+    cadence: Mapped[str] = mapped_column(String(20))  # monthly|quarterly|yearly
+    next_due_date: Mapped[date] = mapped_column(Date)
+    notes: Mapped[str] = mapped_column(String(255), default="")
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("group_categories.id"), nullable=True)
+    created_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    group: Mapped["Group"] = relationship("Group")
+    category: Mapped["GroupCategory"] = relationship("GroupCategory")
+    created_by: Mapped["User"] = relationship("User", foreign_keys=[created_by_id])
+    members: Mapped[List["SubscriptionMember"]] = relationship(
+        "SubscriptionMember", back_populates="subscription", cascade="all, delete-orphan"
+    )
+
+
+class SubscriptionMember(Base):
+    __tablename__ = "subscription_members"
+    __table_args__ = (UniqueConstraint("subscription_id", "user_id", name="uq_subscription_member"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("subscriptions.id"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
+    share: Mapped[int] = mapped_column(Integer)  # weight, not percentage
+
+    subscription: Mapped["Subscription"] = relationship("Subscription", back_populates="members")
+    user: Mapped["User"] = relationship("User")
