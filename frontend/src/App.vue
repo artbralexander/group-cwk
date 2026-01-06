@@ -52,11 +52,11 @@
               Logout
             </button>
           </div>
-          <div class="d-flex gap-2 flex-column flex-sm-row w-100 w-sm-auto" v-else>
-            <RouterLink to="/login" class="btn btn-outline-secondary btn-sm w-100 w-sm-auto" @click="closeMobileNav">
+          <div class="d-flex gap-2 flex-column flex-sm-row align-items-start align-items-sm-center" v-else>
+            <RouterLink to="/login" class="btn btn-outline-secondary btn-sm" @click="closeMobileNav">
               Login
             </RouterLink>
-            <RouterLink to="/register" class="btn btn-primary btn-sm w-100 w-sm-auto" @click="closeMobileNav">
+            <RouterLink to="/register" class="btn btn-primary btn-sm" @click="closeMobileNav">
               Sign up
             </RouterLink>
           </div>
