@@ -70,6 +70,7 @@ class Expense(Base):
     amount: Mapped[int] = mapped_column(Integer)  # stored as cents
     paid_by_id: Mapped[int] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    split_mode: Mapped[str] = mapped_column(String(20),default="equal")
 
     group: Mapped["Group"] = relationship("Group")
     category: Mapped["GroupCategory"] = relationship("GroupCategory",back_populates="expenses")

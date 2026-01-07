@@ -162,6 +162,7 @@ class ExpenseCreateRequest(BaseModel):
     splits: List[ExpenseSplitInput]
     split_members: List[str] | None = None
     category_id: int | None= None
+    split_mode: str
 
 
 class ExpenseSplitResponse(BaseModel):
@@ -1333,7 +1334,9 @@ def create_group_expense(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Payer must be in group")
-    if payload.category_id is not None:
+    if (payload.split_mode == "category"):
+        if payload.category_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="Category Split requires a category")
         split_items = derive_splits_from_category(db=db,group=group,category_id=payload.category_id,amount=amount_cents,paid_by_id=payer.id)
     else:
         _, split_items,_ = validate_expense_payload(group,payload)
@@ -1376,7 +1379,16 @@ def update_group_expense(
     if not expense or expense.group_id != group_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Expense not found")
 
-    payer, split_items, amount_cents = validate_expense_payload(group, payload)
+    payer = member_map.get(payload.paid_by)
+    if not payer:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="Payer must be in group")
+    amount_cents = dollars_to_cents(payload.amount)
+    if payload.split_mode == "category":
+        if payload.category_id is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST,detail="Category split requires a category")
+        split_items = derive_splits_from_category(db=db, group=group,category_id=payload.category_id,amount=amount_cents,paid_by_id=payer.id)
+    else:
+        _, split_items, _ = validate_expense_payload(group=group, payload=payload)
     update_expense(
         db,
         expense,
