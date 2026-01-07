@@ -481,6 +481,14 @@
                     <button
                       type="button"
                       class="btn"
+                      :class="expenseForm.splitMode === 'category' ? 'btn-primary' : 'btn-outline-primary'"
+                      @click="expenseForm.splitMode = 'category'"
+                    >
+                      Category
+                    </button>
+                    <button
+                      type="button"
+                      class="btn"
                       :class="expenseForm.splitMode === 'random' ? 'btn-primary' : 'btn-outline-primary'"
                       @click="expenseForm.splitMode = 'random'"
                     >
@@ -1188,6 +1196,17 @@ watch(
     }
   }
 )
+watch(
+() => expenseForm.category_id,
+(newCategoryId) => {
+  if (newCategoryId !== null){
+    expenseForm.splitMode = "category"
+  }
+  else{
+    expenseForm.splitMode="equal"
+  }
+}
+)
 
 watch(
   () => equalSelectedMembers.value,
@@ -1281,6 +1300,8 @@ async function saveExpense() {
           ? Number(expenseForm.amount)
           : 0
     }))
+  } else if (expenseForm.splitMode === "category"){
+    splitsPayload=[]
   }
 
   try {
@@ -1289,7 +1310,8 @@ async function saveExpense() {
       amount: Number(expenseForm.amount),
       paid_by: expenseForm.paidBy,
       splits: splitsPayload,
-      category_id: expenseForm.category_id
+      category_id: expenseForm.category_id,
+      split_mode: expenseForm.splitMode
     }
 
     if (isEditingExpense.value) {
