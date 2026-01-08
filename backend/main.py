@@ -1038,22 +1038,33 @@ def delete_category(
     group_id: int,
     category_id:int,
     db: Session = Depends(get_db),
-    current_user= Depends(get_current_user)
+    current_user= Depends(get_current_user),
+    background_tasks: BackgroundTasks = None,
 ):
+    group = get_group_with_members(db, group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     category = (db.query(GroupCategory).filter(GroupCategory.id == category_id, GroupCategory.group_id == group_id).first())
     if not category:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found.")
-    if category.group.owner_id != current_user.id:
+    if group.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is not the owner")
     db.delete(category)
     db.commit()
+    notify_group_members(
+        background_tasks,
+        group,
+        {"type": "categories_changed", "data": {"group_id": group_id}},
+        exclude_user_ids=[current_user.id],
+    )
 
 @app.post("/api/groups/{group_id}/categories",response_model=CategoryResponse,status_code=status.HTTP_201_CREATED)
 def create_group_category(
     group_id:int,
     payload: CategoryCreateRequest,
     current_user= Depends(get_current_user),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
 ):
     group = get_group_with_members(db,group_id=group_id)
     if not group:
@@ -1081,6 +1092,12 @@ def create_group_category(
         db.add(CategorySplit(category_id=category.id,user_id=user_id,share=split.share))
     db.commit()
     db.refresh(category)
+    notify_group_members(
+        background_tasks,
+        group,
+        {"type": "categories_changed", "data": {"group_id": group_id}},
+        exclude_user_ids=[current_user.id],
+    )
     return serialize_category(category=category)
 
 
@@ -1091,12 +1108,15 @@ def update_group_category(
     payload: CategoryCreateRequest,
     current_user=Depends(get_current_user),
     db: Session = Depends(get_db),
+    background_tasks: BackgroundTasks = None,
 ):
     category = (db.query(GroupCategory).options(selectinload(GroupCategory.splits)).filter(GroupCategory.id == category_id,GroupCategory.group_id == group_id).first())
     if not category:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found")
     
     group = get_group_with_members(db,group_id)
+    if not group:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     if group.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only owner can edit categories")
     
@@ -1111,10 +1131,16 @@ def update_group_category(
     for split in payload.splits:
         user_id = member_map.get(split.username)
         if not user_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{split.username not in group}")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{split.username} not in group")
         db.add(CategorySplit(category_id=category_id,user_id=user_id,share=split.share))
     db.commit()
     db.refresh(category)
+    notify_group_members(
+        background_tasks,
+        group,
+        {"type": "categories_changed", "data": {"group_id": group_id}},
+        exclude_user_ids=[current_user.id],
+    )
     return serialize_category(category)
 
     

@@ -1,4 +1,7 @@
-import {ref} from "vue"
+import { ref } from "vue"
+import { subscribeToNotifications } from "../services/notifications"
+
+let categoriesUnsubscribe = null
 export function useCategories(groupIdRef){
     const categories = ref([])
     const loadingCategories = ref(false)
@@ -83,6 +86,16 @@ export function useCategories(groupIdRef){
         fetchCategories,
         createCategory,
         updateCategory,
-        deleteCategory
+        deleteCategory,
+        connectToCategoryNotifications(onChange){
+            if (categoriesUnsubscribe || typeof window === "undefined"){
+                return
+            }
+            categoriesUnsubscribe = subscribeToNotifications("categories_changed", (data) => {
+                if (data?.group_id && typeof onChange === "function"){
+                    onChange(data.group_id, data)
+                }
+            })
+        }
     }
 }
