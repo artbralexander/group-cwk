@@ -220,7 +220,7 @@
           <div class="d-flex justify-content-between align-items-center flex-wrap gap-2">
             <h5 class="card-title mb-0">Categories</h5>
           </div>
-          <div v-if="categoriesError" class="alert alert-danger">{{ categoryError }}</div>
+          <div v-if="categoriesError" class="alert alert-danger">{{ categoriesError }}</div>
           <div v-else-if="loadingCategories" class="text-center py-3">
             <div class="spinner-border text-primary" role="status">
               <span class="visually-hidden">Loading...</span>
@@ -245,7 +245,7 @@
                     <button v-if="isOwner" class="btn btn-outline-secondary" type="button" @click="handleEditCategory(category)">
                       Edit
                     </button>
-                    <button class="btn btn-outline-danger" type="button" @click="handleDeleteExpense(expense)">
+                    <button class="btn btn-outline-danger" type="button" @click="handleDeleteCategory(category)">
                       Delete
                     </button>
                   </div>
@@ -752,7 +752,9 @@ const{
   categoriesError,
   fetchCategories,
   createCategory,
-  updateCategory
+  updateCategory,
+  deleteCategory,
+  connectToCategoryNotifications,
 } = useCategories(groupId)
 const {
   loading: subscriptionsLoading,
@@ -761,7 +763,8 @@ const {
   create: createSubscription,
   update: updateSubscription,
   remove: removeSubscription,
-  pay: paySubscription
+  pay: paySubscription,
+  connectToSubscriptionNotifications
 } = useSubscriptions()
 const {
   activeGroup: group,
@@ -879,6 +882,7 @@ function resetGroupSettingsForm() {
   }
 }
 async function openCategoryModal(category = null){
+  console.log(category)
   categoryError.value = ""
   if (category){
     editingCategoryID.value = category.id
@@ -1394,6 +1398,19 @@ async function handleDeleteExpense(expense) {
   }
 }
 
+async function handleDeleteCategory(category) {
+  if (!route.params.id) return
+  const confirmed = window.confirm("Delete this category?")
+  if (!confirmed) return
+  categoriesError.value = ""
+  try {
+    await deleteCategory(category.id)
+    await fetchCategories()
+  } catch (err) {
+    categoriesError.value = err.message || "Failed to delete category"
+  }
+}
+
 function isEqualSelected(username) {
   return equalSelectedMembers.value.includes(username)
 }
@@ -1553,6 +1570,16 @@ async function handlePaySubscription(sub) {
 onMounted(() => {
   connectToGroupUpdates()
   connectToExpenseNotifications()
+  connectToSubscriptionNotifications((changedGroupId) => {
+    if (String(changedGroupId) === String(route.params.id)) {
+      loadSubscriptions()
+    }
+  })
+  connectToCategoryNotifications((changedGroupId) => {
+    if (String(changedGroupId) === String(route.params.id)) {
+      fetchCategories()
+    }
+  })
   loadGroup()
 })
 watch(

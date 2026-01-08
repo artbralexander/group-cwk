@@ -1,4 +1,7 @@
 import { ref } from "vue"
+import { subscribeToNotifications } from "../services/notifications"
+
+let subscriptionsUnsubscribe = null
 
 export function useSubscriptions() {
   const loading = ref(false)
@@ -13,7 +16,11 @@ export function useSubscriptions() {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.detail || "Request failed")
       }
-      return await res.json()
+      const text = await res.text()
+      if (!text) {
+        return null
+      }
+      return JSON.parse(text)
     } catch (err) {
       error.value = err.message || "Request failed"
       throw err
@@ -47,6 +54,16 @@ export function useSubscriptions() {
     },
     pay(groupId, subId) {
       return request(`/api/groups/${groupId}/subscriptions/${subId}/pay`, { method: "POST" })
+    },
+    connectToSubscriptionNotifications(onChange) {
+      if (subscriptionsUnsubscribe || typeof window === "undefined") {
+        return
+      }
+      subscriptionsUnsubscribe = subscribeToNotifications("subscriptions_changed", (data) => {
+        if (data?.group_id && typeof onChange === "function") {
+          onChange(data.group_id, data)
+        }
+      })
     }
   }
 }

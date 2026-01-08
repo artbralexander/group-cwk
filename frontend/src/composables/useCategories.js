@@ -1,4 +1,7 @@
-import {ref} from "vue"
+import { ref } from "vue"
+import { subscribeToNotifications } from "../services/notifications"
+
+let categoriesUnsubscribe = null
 export function useCategories(groupIdRef){
     const categories = ref([])
     const loadingCategories = ref(false)
@@ -43,6 +46,20 @@ export function useCategories(groupIdRef){
         return await response.json()
     }
 
+    async function deleteCategory(categoryID){
+        const res = await fetch(
+            `/api/groups/${groupIdRef.value}/categories/${categoryID}`,
+            {
+                method:"DELETE",
+                credentials:"include"
+            }
+        )
+        if (!res.ok){
+            const body = await res.json().catch(() => ({}))
+            throw new Error(body.detail || "Failed to delete category")
+        }
+    }
+
     async function createCategory(payload){
         if (!groupIdRef.value){
             return
@@ -68,6 +85,17 @@ export function useCategories(groupIdRef){
         categoriesError,
         fetchCategories,
         createCategory,
-        updateCategory
+        updateCategory,
+        deleteCategory,
+        connectToCategoryNotifications(onChange){
+            if (categoriesUnsubscribe || typeof window === "undefined"){
+                return
+            }
+            categoriesUnsubscribe = subscribeToNotifications("categories_changed", (data) => {
+                if (data?.group_id && typeof onChange === "function"){
+                    onChange(data.group_id, data)
+                }
+            })
+        }
     }
 }
