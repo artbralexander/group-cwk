@@ -753,7 +753,8 @@ const {
   create: createSubscription,
   update: updateSubscription,
   remove: removeSubscription,
-  pay: paySubscription
+  pay: paySubscription,
+  connectToSubscriptionNotifications
 } = useSubscriptions()
 const {
   activeGroup: group,
@@ -1531,6 +1532,12 @@ async function handlePaySubscription(sub) {
 onMounted(() => {
   connectToGroupUpdates()
   connectToExpenseNotifications()
+  connectToSubscriptionNotifications((changedGroupId) => {
+    if (!route.params.id || String(route.params.id) !== String(changedGroupId)) {
+      return
+    }
+    loadSubscriptions()
+  })
   loadGroup()
 })
 watch(

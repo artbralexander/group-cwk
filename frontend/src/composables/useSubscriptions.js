@@ -1,8 +1,10 @@
 import { ref } from "vue"
+import { subscribeToNotifications } from "../services/notifications"
 
 export function useSubscriptions() {
   const loading = ref(false)
   const error = ref("")
+  let subscriptionUnsubscribe = null
 
   async function request(url, options = {}) {
     loading.value = true
@@ -25,6 +27,16 @@ export function useSubscriptions() {
   return {
     loading,
     error,
+    connectToSubscriptionNotifications(onChange) {
+      if (subscriptionUnsubscribe || typeof window === "undefined") {
+        return
+      }
+      subscriptionUnsubscribe = subscribeToNotifications("subscriptions_changed", (data) => {
+        if (data?.group_id && typeof onChange === "function") {
+          onChange(data.group_id)
+        }
+      })
+    },
     list(groupId) {
       return request(`/api/groups/${groupId}/subscriptions`)
     },
