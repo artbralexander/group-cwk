@@ -13,7 +13,11 @@ export function useSubscriptions() {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.detail || "Request failed")
       }
-      return await res.json()
+      const text = await res.text()
+      if (!text) {
+        return null
+      }
+      return JSON.parse(text)
     } catch (err) {
       error.value = err.message || "Request failed"
       throw err
