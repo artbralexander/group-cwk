@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, EmailStr
 from sqlalchemy.orm import Session, selectinload
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 from backend.db import get_db, SessionLocal, Base, engine
 from backend.crud.users import get_user_by_username, create_user, get_user_by_email, update_user
 from datetime import date, timedelta
@@ -1071,17 +1072,29 @@ def create_group_category(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Group not found")
     if group.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Owner can only make categories")
-    if not payload.name.strip():
+    name = payload.name.strip()
+    if not name:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category name is required")
+    existing = (
+        db.query(GroupCategory)
+        .filter(GroupCategory.group_id == group_id, GroupCategory.name == name)
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category name already exists")
     
     category = GroupCategory(
         group_id=group_id,
-        name=payload.name.strip(),
+        name=name,
         description=payload.description or "",
         budget=payload.budget or 0
     )
     db.add(category)
-    db.flush()
+    try:
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category name already exists")
 
     member_map = {member.user.username: member.user_id for member in group.members}
 
@@ -1120,7 +1133,22 @@ def update_group_category(
     if group.owner_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only owner can edit categories")
     
-    category.name = payload.name.strip()
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category name is required")
+    existing = (
+        db.query(GroupCategory)
+        .filter(
+            GroupCategory.group_id == group_id,
+            GroupCategory.name == name,
+            GroupCategory.id != category_id,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category name already exists")
+
+    category.name = name
     category.description = payload.description or ""
     category.budget = payload.budget or 0
 
@@ -1133,7 +1161,11 @@ def update_group_category(
         if not user_id:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"{split.username} not in group")
         db.add(CategorySplit(category_id=category_id,user_id=user_id,share=split.share))
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Category name already exists")
     db.refresh(category)
     notify_group_members(
         background_tasks,
@@ -1588,20 +1620,35 @@ def create_group_subscription(
     if not any(m.user_id == current_user.id for m in group.members):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
 
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subscription name is required")
+    existing = (
+        db.query(Subscription)
+        .filter(Subscription.group_id == group_id, Subscription.name == name)
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subscription name already exists")
+
     member_shares = _build_member_shares(group, payload.members)
     amount_cents = dollars_to_cents(payload.amount)
-    sub = persist_subscription(
-        db,
-        group_id=group_id,
-        name=payload.name.strip(),
-        amount_cents=amount_cents,
-        cadence=payload.cadence.strip().lower(),
-        next_due=payload.next_due_date,
-        notes=payload.notes or "",
-        category_id=payload.category_id,
-        created_by_id=current_user.id,
-        member_shares=member_shares,
-    )
+    try:
+        sub = persist_subscription(
+            db,
+            group_id=group_id,
+            name=name,
+            amount_cents=amount_cents,
+            cadence=payload.cadence.strip().lower(),
+            next_due=payload.next_due_date,
+            notes=payload.notes or "",
+            category_id=payload.category_id,
+            created_by_id=current_user.id,
+            member_shares=member_shares,
+        )
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subscription name already exists")
     notify_group_members(background_tasks, group, {"type": "subscriptions_changed", "data": {"group_id": group_id}}, exclude_user_ids=[current_user.id])
     return serialize_subscription(sub)
 
@@ -1624,19 +1671,38 @@ def update_group_subscription(
     if not sub or sub.group_id != group_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subscription not found")
 
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subscription name is required")
+    existing = (
+        db.query(Subscription)
+        .filter(
+            Subscription.group_id == group_id,
+            Subscription.name == name,
+            Subscription.id != sub.id,
+        )
+        .first()
+    )
+    if existing:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subscription name already exists")
+
     member_shares = _build_member_shares(group, payload.members)
     amount_cents = dollars_to_cents(payload.amount)
-    updated = persist_subscription_update(
-        db,
-        sub,
-        name=payload.name.strip(),
-        amount_cents=amount_cents,
-        cadence=payload.cadence.strip().lower(),
-        next_due=payload.next_due_date,
-        notes=payload.notes or "",
-        category_id=payload.category_id,
-        member_shares=member_shares,
-    )
+    try:
+        updated = persist_subscription_update(
+            db,
+            sub,
+            name=name,
+            amount_cents=amount_cents,
+            cadence=payload.cadence.strip().lower(),
+            next_due=payload.next_due_date,
+            notes=payload.notes or "",
+            category_id=payload.category_id,
+            member_shares=member_shares,
+        )
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subscription name already exists")
     notify_group_members(background_tasks, group, {"type": "subscriptions_changed", "data": {"group_id": group_id}}, exclude_user_ids=[current_user.id])
     return serialize_subscription(updated)
 
