@@ -66,13 +66,18 @@ const route = useRoute()
 const groupId = computed(() => route.params.id)
 const categoryId = computed(() => Number(route.params.categoryId))
 const {expensesByGroup, fetchExpenses} = useExpenses()
-const {categories, fetchCategories, loadingCategories} = useCategories(groupId)
+const {categories, fetchCategories, loadingCategories, connectToCategoryNotifications} = useCategories(groupId)
 
 onMounted(async () => {
   await fetchCategories()
   console.log("Categories:", categories.value)
   console.log("categoryId:", categoryId)
   await fetchExpenses(groupId.value)
+  connectToCategoryNotifications((changedGroupId) => {
+    if (String(changedGroupId) === String(groupId.value)) {
+      fetchCategories()
+    }
+  })
 })
 
 const category = computed(() => categories.value.find(c => c.id === categoryId.value))

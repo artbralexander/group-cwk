@@ -754,6 +754,7 @@ const{
   createCategory,
   updateCategory,
   deleteCategory,
+  connectToCategoryNotifications,
 } = useCategories(groupId)
 const {
   loading: subscriptionsLoading,
@@ -762,7 +763,8 @@ const {
   create: createSubscription,
   update: updateSubscription,
   remove: removeSubscription,
-  pay: paySubscription
+  pay: paySubscription,
+  connectToSubscriptionNotifications
 } = useSubscriptions()
 const {
   activeGroup: group,
@@ -1568,6 +1570,16 @@ async function handlePaySubscription(sub) {
 onMounted(() => {
   connectToGroupUpdates()
   connectToExpenseNotifications()
+  connectToSubscriptionNotifications((changedGroupId) => {
+    if (String(changedGroupId) === String(route.params.id)) {
+      loadSubscriptions()
+    }
+  })
+  connectToCategoryNotifications((changedGroupId) => {
+    if (String(changedGroupId) === String(route.params.id)) {
+      fetchCategories()
+    }
+  })
   loadGroup()
 })
 watch(
