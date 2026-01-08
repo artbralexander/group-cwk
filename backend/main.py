@@ -324,10 +324,11 @@ def build_rephraser_facts(profile_summary: ProfileSpendingSummaryResponse) -> di
 
 
 def deterministic_fallback_summary(profile_summary: ProfileSpendingSummaryResponse) -> str:
-    groups = profile_summary.groups or []
+    groups = list(profile_summary.groups or [])
+
     if not groups:
-        paid = getattr(profile_summary, "overall_paid_display", f"{profile_summary.overall_paid:.2f}")
-        owed = getattr(profile_summary, "overall_owed_display", f"{profile_summary.overall_owed:.2f}")
+        paid = getattr(profile_summary, "overall_paid_display", None) or f"{(profile_summary.overall_paid or 0.0):.2f}"
+        owed = getattr(profile_summary, "overall_owed_display", None) or f"{(profile_summary.overall_owed or 0.0):.2f}"
         return f"You have no group activity yet (paid {paid}, owed {owed})."
 
     totals_by_cur: dict[str, dict[str, float]] = {}
@@ -343,13 +344,18 @@ def deterministic_fallback_summary(profile_summary: ProfileSpendingSummaryRespon
     
     header = f"Across your groups (MIX CUR ({cur_count})) totals are: " if cur_count > 1 else "Across your groups totals are: "
 
+
+
     parts = []
     for cur in cur_codes:
         t = totals_by_cur[cur]
+        prefix = f"{cur} " if cur != "UNK" else ""
         parts.append(
             f"{cur} {format_money(cur, t['paid'])} / {format_money(cur, t['owed'])} "
             f"(net {format_money(cur, t['net'])})"
         )
+
+
     s1 = header + " and ".join(parts) + "."
 
     top = sorted(groups, key=lambda g: abs(float(g.net)), reverse=True)[0]
