@@ -103,6 +103,7 @@ class CategoryResponse(BaseModel):
     name: str
     description: str| None
     budget: float | None
+    splits: List[CategorySplitInput] = []
 
 
 
@@ -569,7 +570,9 @@ def serialize_category(category: GroupCategory) -> CategoryResponse:
         id=category.id,
         name=category.name,
         description=category.description,
-        budget=cents_to_dollars(category.budget) if category.budget else None
+        budget=cents_to_dollars(category.budget) if category.budget else None,
+        splits = [CategorySplitInput(username=split.user.username if split.user else "",
+                                     share = split.share,) for split in (category.splits or [])],
     )
 
 
@@ -1028,8 +1031,22 @@ def list_group_categories(
     if not any(member.user_id == current_user.id for member in group.members):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access Denied")
     
-    categories = (db.query(GroupCategory).filter(GroupCategory.group_id == group_id).all())
+    categories = (db.query(GroupCategory).options(selectinload(GroupCategory.splits).selectinload(CategorySplit.user)).filter(GroupCategory.group_id==group_id).all())
     return [serialize_category(category) for category in categories]
+@app.delete("/api/groups/{group_id}/categories/{category_id}")
+def delete_category(
+    group_id: int,
+    category_id:int,
+    db: Session = Depends(get_db),
+    current_user= Depends(get_current_user)
+):
+    category = (db.query(GroupCategory).filter(GroupCategory.id == category_id, GroupCategory.group_id == group_id).first())
+    if not category:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Category not found.")
+    if category.group.owner_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User is not the owner")
+    db.delete(category)
+    db.commit()
 
 @app.post("/api/groups/{group_id}/categories",response_model=CategoryResponse,status_code=status.HTTP_201_CREATED)
 def create_group_category(
